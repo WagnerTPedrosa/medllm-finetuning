@@ -1,0 +1,18 @@
+[project]
+name="medllm-finetuining"
+version = "0.0.1"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "pandas",
+    "datasets",
+    "huggingface_hub",
+    "numpy>=2,<3",
+    "tiktoken",
+    "torch",
+    "transformers"
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+]
