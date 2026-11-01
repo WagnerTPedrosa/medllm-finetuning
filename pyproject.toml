@@ -9,7 +9,9 @@ dependencies = [
     "numpy>=2,<3",
     "tiktoken",
     "torch",
-    "transformers"
+    "transformers",
+    "matplotlib",
+    "scikit-learn"
 ]
 
 [dependency-groups]

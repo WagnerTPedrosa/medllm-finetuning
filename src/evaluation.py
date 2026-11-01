@@ -1,5 +1,6 @@
 import torch
 
+@torch.inference_mode()
 def evaluate(model, dataloader, device):
     model.eval()
 

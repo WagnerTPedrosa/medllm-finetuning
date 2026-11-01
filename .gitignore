@@ -1,0 +1,29 @@
+# Python bytecode and build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+/build/
+/dist/
+
+# Virtual environments and local secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+/.aws/
+
+# Notebook and tool caches
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Generated model checkpoints
+/checkpoints/
+
+# Operating system files
+.DS_Store
+Thumbs.db
