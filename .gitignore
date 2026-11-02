@@ -23,7 +23,12 @@ htmlcov/
 
 # Generated model checkpoints
 /checkpoints/
+/mlruns/
+/mlflow.db*
 
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Hugging Face datasets caches
+data/processed/**/cache-*.arrow

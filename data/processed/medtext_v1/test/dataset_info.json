@@ -9,6 +9,10 @@
     "completion": {
       "dtype": "large_string",
       "_type": "Value"
+    },
+    "n_tokens": {
+      "dtype": "int64",
+      "_type": "Value"
     }
   },
   "homepage": "",

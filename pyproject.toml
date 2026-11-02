@@ -7,14 +7,25 @@ dependencies = [
     "datasets",
     "huggingface_hub",
     "numpy>=2,<3",
-    "tiktoken",
     "torch",
     "transformers",
     "matplotlib",
-    "scikit-learn"
+    "scikit-learn",
+    "trl>=1.17.1",
+    "optuna>=5.0.0",
+    "deepeval>=4.3.2",
+    "anthropic>=2.3.0",
+    "pyyaml>=6.0.3",
+    "mlflow>=3.0.0",
+    "nvidia-ml-py>=13.615.71",
 ]
 
 [dependency-groups]
 dev = [
     "ipykernel>=7.4.0",
+    "pytest>=9.2.0",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

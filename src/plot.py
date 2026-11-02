@@ -1,14 +1,28 @@
+"""Loss curves for single runs and hyperparameter searches."""
+
+from operator import itemgetter
 from pathlib import Path
+from typing import Any
+
 import matplotlib.pyplot as plt
 
 
 def plot_losses(
-    train_losses,
-    val_losses,
-    baseline_val_loss=None,
-    title="GPT-2 Fine-Tuning - MedText",
-    save_path="experiments/loss_curve.png",
-):
+    train_losses: list[float],
+    val_losses: list[float],
+    baseline_val_loss: float | None = None,
+    title: str = "GPT-2 Fine-Tuning - MedText",
+    save_path: str | Path = "experiments/loss_curve.png",
+) -> None:
+    """Plot one run's train and validation loss per epoch and save the figure.
+
+    Args:
+        train_losses: Training loss per epoch.
+        val_losses: Validation loss per epoch.
+        baseline_val_loss: Validation loss before fine-tuning, drawn at epoch 0.
+        title: Figure title.
+        save_path: Where to save the PNG.
+    """
     epochs = list(range(1, len(train_losses) + 1))
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -53,16 +67,29 @@ def plot_losses(
 
 
 def plot_grid_search(
-    results,
-    baseline_val_loss=None,
-    save_path="experiments/grid_search_losses.png",
-):
+    results: list[dict[str, Any]],
+    baseline_val_loss: float | None = None,
+    save_path: str | Path = "experiments/grid_search_losses.png",
+) -> None:
+    """Compare the loss curves and best validation loss of every trial.
+
+    Works with the results of both `run_grid_search` and `run_optuna_search`;
+    trials are labelled by batch size and learning rate only.
+
+    Args:
+        results: Trial results with losses, `batch_size` and `learning_rate`.
+        baseline_val_loss: Validation loss before fine-tuning, drawn as a line.
+        save_path: Where to save the PNG.
+
+    Raises:
+        ValueError: If results is empty.
+    """
     if not results:
         raise ValueError("results must contain at least one grid search trial")
 
     fig, axes = plt.subplots(1, 3, figsize=(19, 5))
     colors = plt.get_cmap("tab10")
-    best_trial = min(results, key=lambda result: result["best_val_loss"])
+    best_trial = min(results, key=itemgetter("best_val_loss"))
     labels = []
     handles = []
 
