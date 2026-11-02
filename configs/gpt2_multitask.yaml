@@ -22,7 +22,7 @@ training:
   max_grad_norm: 1.0
   weight_decay: 0.01
   lr_scheduler_type: constant
-  warmup_ratio: 0.0
+  warmup_ratio: 0.05
 
 multitask:
   processed_dir: data/processed/multitask_v1
@@ -45,8 +45,8 @@ multitask:
   num_proc: 16
 
 finetune:
-  learning_rate: 5.0e-5
-  batch_size: 8
+  learning_rate: 8.0e-5
+  batch_size: 16
   seeds: [42, 43, 44]
   output_dir: checkpoints/multitask
 
