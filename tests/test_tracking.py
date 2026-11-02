@@ -129,3 +129,19 @@ def test_resolve_model_source_downloads_logged_model_weights(
 
     assert local_dir.name == "model"
     assert (local_dir / "config.json").exists()
+
+
+@pytest.mark.parametrize("alias", ["latest", "Latest"])
+def test_log_best_model_rejects_reserved_alias_before_logging(
+    alias: str, config: Config, tracking_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(mlflow_transformers, "log_model", lambda **kwargs: calls.append(kwargs))
+    configure_tracking(config)
+    with mlflow.start_run() as run:
+        pass
+
+    with pytest.raises(ValueError, match="reserved"):
+        log_best_model(run.info.run_id, tracking_store, "test-sft", alias)
+
+    assert calls == []

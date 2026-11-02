@@ -20,10 +20,10 @@ from typing import Any
 import mlflow
 from datasets import Dataset
 
-from src.config import Config, Hyperparameters
+from src.config import Config, Hyperparameters, PretrainConfig
 
 
-def configure_tracking(config: Config) -> None:
+def configure_tracking(config: Config | PretrainConfig) -> None:
     """Use the configured store and avoid names reserved by deleted experiments."""
     mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", config.mlflow.tracking_uri))
     if config.mlflow.log_system_metrics:
@@ -52,6 +52,9 @@ def configure_tracking(config: Config) -> None:
         experiment_name = requested_name
     mlflow.set_experiment(experiment_name)
 
+
+# MLflow reserves these alias names (case insensitive)
+RESERVED_ALIASES = {"latest"}
 
 # The repository that contains this code, wherever the process was started from
 REPO_DIR = Path(__file__).resolve().parent
@@ -87,7 +90,7 @@ def git_tags(repo_dir: str | Path = REPO_DIR) -> dict[str, str]:
 def start_stage_run(
     stage: str,
     run_name: str,
-    config: Config,
+    config: Config | PretrainConfig,
     extra_tags: dict[str, str] | None = None,
     nested: bool = False,
 ) -> mlflow.ActiveRun:
@@ -223,7 +226,14 @@ def log_best_model(
 
     Returns:
         The MLflow logged-model id.
+
+    Raises:
+        ValueError: If the alias is reserved by MLflow (checked before the
+            model is logged, so no time is spent on a model that cannot be tagged).
     """
+    if alias.lower() in RESERVED_ALIASES:
+        raise ValueError(f"MLflow alias {alias!r} is reserved; choose another name")
+
     parent = mlflow.active_run()
     with mlflow.start_run(run_id=run_id, nested=parent is not None):
         model_info = mlflow.transformers.log_model(

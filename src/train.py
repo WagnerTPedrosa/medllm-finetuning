@@ -319,11 +319,17 @@ def log_search_summary(best: TrialResult, results_path: str | Path) -> None:
 
 
 class OptunaPruningCallback(TrainerCallback):
-    """Report each epoch's validation loss to Optuna and stop the run when the
-    pruner judges the trial worse than earlier trials at that epoch."""
+    """Report a validation metric to Optuna after every evaluation and stop the
+    run when the pruner judges the trial worse than earlier trials at that point.
 
-    def __init__(self, trial: optuna.Trial) -> None:
+    With several eval datasets the trainer calls `on_evaluate` once per
+    dataset; only calls that contain `metric_name` are reported.
+    """
+
+    def __init__(self, trial: optuna.Trial, metric_name: str = "eval_loss") -> None:
         self.trial = trial
+        self.metric_name = metric_name
+        self.reports = 0
         self.log_history: list[dict[str, float]] = []
 
     def on_evaluate(
@@ -334,13 +340,17 @@ class OptunaPruningCallback(TrainerCallback):
         metrics: dict[str, float] | None = None,
         **kwargs: Any,
     ) -> None:
+        if metrics is None or self.metric_name not in metrics:
+            return
+
         # Kept so a pruned trial's losses can still be recorded
         self.log_history = list(state.log_history)
-        epoch: int = len(losses_by_epoch(self.log_history)[1])
-
-        self.trial.report(metrics["eval_loss"], step=epoch)
+        # Steps start at 0: MedianPruner skips steps below n_warmup_steps, so
+        # n_warmup_steps=1 protects exactly the first evaluation
+        self.trial.report(metrics[self.metric_name], step=self.reports)
+        self.reports += 1
         if self.trial.should_prune():
-            raise optuna.TrialPruned(f"Pruned at epoch {epoch}")
+            raise optuna.TrialPruned(f"Pruned at evaluation {self.reports}")
 
 
 def suggest_hyperparameters(
