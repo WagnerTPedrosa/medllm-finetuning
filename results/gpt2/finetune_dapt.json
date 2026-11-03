@@ -1,0 +1,88 @@
+{
+  "base": "dapt",
+  "model_id": "models:/gpt2-pubmed-dapt@candidate",
+  "parent_run_id": "49e515794ef94a3b9daec9a935185412",
+  "registered_model_uri": "models:/gpt2-med-multitask@dapt-best",
+  "seeds": [
+    {
+      "seed": 42,
+      "run_id": "7d61761e42ad4b11bed903ae6509a8a1",
+      "model_dir": "checkpoints/multitask/gpt2-pubmed-dapt@candidate-seed42/best"
+    },
+    {
+      "seed": 43,
+      "run_id": "547374be5d784e02be2f5e3e7cd27fa8",
+      "model_dir": "checkpoints/multitask/gpt2-pubmed-dapt@candidate-seed43/best"
+    },
+    {
+      "seed": 44,
+      "run_id": "1e68c4be0b2248aab94a894ca09fa61a",
+      "model_dir": "checkpoints/multitask/gpt2-pubmed-dapt@candidate-seed44/best"
+    }
+  ],
+  "results": [
+    {
+      "run_id": "7d61761e42ad4b11bed903ae6509a8a1",
+      "model_dir": "checkpoints/multitask/gpt2-pubmed-dapt@candidate-seed42/best",
+      "best_dev_combined_loss": 2.234393358230591,
+      "mixture_epochs_trained": 3.0,
+      "test_medmcqa_accuracy": 0.3348481224587419,
+      "test_medmcqa_macro_f1": 0.20002914260634833,
+      "test_medtext_loss": 1.9892607927322388,
+      "test_pubmedqa_accuracy": 0.634,
+      "test_pubmedqa_macro_f1": 0.4455041982554822
+    },
+    {
+      "run_id": "547374be5d784e02be2f5e3e7cd27fa8",
+      "model_dir": "checkpoints/multitask/gpt2-pubmed-dapt@candidate-seed43/best",
+      "best_dev_combined_loss": 2.2203562259674072,
+      "mixture_epochs_trained": 3.0,
+      "test_medmcqa_accuracy": 0.27911982779239414,
+      "test_medmcqa_macro_f1": 0.20965307686539744,
+      "test_medtext_loss": 1.9711424112319946,
+      "test_pubmedqa_accuracy": 0.642,
+      "test_pubmedqa_macro_f1": 0.4509116600092389
+    },
+    {
+      "run_id": "1e68c4be0b2248aab94a894ca09fa61a",
+      "model_dir": "checkpoints/multitask/gpt2-pubmed-dapt@candidate-seed44/best",
+      "best_dev_combined_loss": 2.2091243267059326,
+      "mixture_epochs_trained": 3.0,
+      "test_medmcqa_accuracy": 0.2810332456350155,
+      "test_medmcqa_macro_f1": 0.21953070971671299,
+      "test_medtext_loss": 1.9680339097976685,
+      "test_pubmedqa_accuracy": 0.678,
+      "test_pubmedqa_macro_f1": 0.46906978594732235
+    }
+  ],
+  "summary": {
+    "best_dev_combined_loss": {
+      "mean": 2.2212913036346436,
+      "std": 0.012660440996717516
+    },
+    "mixture_epochs_trained": {
+      "mean": 3.0,
+      "std": 0.0
+    },
+    "test_medmcqa_accuracy": {
+      "mean": 0.29833373196205054,
+      "std": 0.031636858677320745
+    },
+    "test_medmcqa_macro_f1": {
+      "mean": 0.20973764306281958,
+      "std": 0.009751058584652438
+    },
+    "test_medtext_loss": {
+      "mean": 1.9761457045873005,
+      "std": 0.011463849618645775
+    },
+    "test_pubmedqa_accuracy": {
+      "mean": 0.6513333333333333,
+      "std": 0.02343786110832928
+    },
+    "test_pubmedqa_macro_f1": {
+      "mean": 0.4551618814040145,
+      "std": 0.012344331380998651
+    }
+  }
+}

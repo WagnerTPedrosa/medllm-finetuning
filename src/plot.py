@@ -1,14 +1,29 @@
+"""Loss curves for single runs and hyperparameter searches."""
+
+from operator import attrgetter, itemgetter
 from pathlib import Path
+from typing import Any
+
 import matplotlib.pyplot as plt
+import mlflow
 
 
 def plot_losses(
-    train_losses,
-    val_losses,
-    baseline_val_loss=None,
-    title="GPT-2 Fine-Tuning - MedText",
-    save_path="experiments/loss_curve.png",
-):
+    train_losses: list[float],
+    val_losses: list[float],
+    baseline_val_loss: float | None = None,
+    title: str = "GPT-2 Fine-Tuning - MedText",
+    save_path: str | Path = "experiments/loss_curve.png",
+) -> None:
+    """Plot one run's train and validation loss per epoch and save the figure.
+
+    Args:
+        train_losses: Training loss per epoch.
+        val_losses: Validation loss per epoch.
+        baseline_val_loss: Validation loss before fine-tuning, drawn at epoch 0.
+        title: Figure title.
+        save_path: Where to save the PNG.
+    """
     epochs = list(range(1, len(train_losses) + 1))
 
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -53,16 +68,29 @@ def plot_losses(
 
 
 def plot_grid_search(
-    results,
-    baseline_val_loss=None,
-    save_path="experiments/grid_search_losses.png",
-):
+    results: list[dict[str, Any]],
+    baseline_val_loss: float | None = None,
+    save_path: str | Path = "experiments/grid_search_losses.png",
+) -> None:
+    """Compare the loss curves and best validation loss of every trial.
+
+    Works with the results of both `run_grid_search` and `run_optuna_search`;
+    trials are labelled by batch size and learning rate only.
+
+    Args:
+        results: Trial results with losses, `batch_size` and `learning_rate`.
+        baseline_val_loss: Validation loss before fine-tuning, drawn as a line.
+        save_path: Where to save the PNG.
+
+    Raises:
+        ValueError: If results is empty.
+    """
     if not results:
         raise ValueError("results must contain at least one grid search trial")
 
     fig, axes = plt.subplots(1, 3, figsize=(19, 5))
     colors = plt.get_cmap("tab10")
-    best_trial = min(results, key=lambda result: result["best_val_loss"])
+    best_trial = min(results, key=itemgetter("best_val_loss"))
     labels = []
     handles = []
 
@@ -122,6 +150,45 @@ def plot_grid_search(
     fig.legend(handles, labels, loc="lower center", ncol=4)
     fig.tight_layout(rect=(0, 0.13, 1, 1))
 
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=300)
+    plt.show()
+    plt.close(fig)
+
+
+def plot_run_metrics(
+    run_id: str,
+    metric_names: list[str],
+    title: str = "Continued pretraining",
+    save_path: str | Path = "experiments/pretrain_curves.png",
+) -> None:
+    """Plot the step history of MLflow metrics of one run, one panel per metric.
+
+    Args:
+        run_id: MLflow run id.
+        metric_names: Metrics to plot, e.g. `["loss", "eval_perplexity"]`.
+        title: Figure title.
+        save_path: Where to save the PNG.
+
+    Raises:
+        ValueError: If metric_names is empty.
+    """
+    if not metric_names:
+        raise ValueError("metric_names must not be empty")
+
+    client = mlflow.MlflowClient()
+    fig, axes = plt.subplots(1, len(metric_names), figsize=(6 * len(metric_names), 4), squeeze=False)
+
+    for ax, name in zip(axes[0], metric_names):
+        history = sorted(client.get_metric_history(run_id, name), key=attrgetter("step"))
+        ax.plot([point.step for point in history], [point.value for point in history], marker=".")
+        ax.set_title(name)
+        ax.set_xlabel("Optimizer step")
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle(title)
+    fig.tight_layout()
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, dpi=300)

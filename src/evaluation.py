@@ -1,27 +1,50 @@
-import torch
+"""Answer-only validation and test loss."""
 
-@torch.inference_mode()
-def evaluate(model, dataloader, device):
-    model.eval()
+import tempfile
 
-    total_loss = 0.0
-    total_tokens = 0
+from datasets import Dataset
+from transformers import PreTrainedModel, PreTrainedTokenizerBase
+from trl import SFTConfig, SFTTrainer
 
-    with torch.no_grad():
-        for batch in dataloader:
-            batch = {
-                key: value.to(device)
-                for key, value in batch.items()
-            }
+from src.config import Config
 
-            outputs = model(**batch)
 
-            # Count target tokens used in next-token loss
-            num_tokens = (
-                batch["labels"][:, 1:] != -100
-            ).sum().item()
+def evaluate(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    dataset: Dataset,
+    config: Config,
+) -> float:
+    """Compute the answer-only cross-entropy loss of a model with SFTTrainer.
 
-            total_loss += outputs.loss.item() * num_tokens
-            total_tokens += num_tokens
+    Uses the same evaluation batch size and maximum length as training, so
+    the result is comparable with the losses logged during the searches.
 
-    return total_loss / total_tokens
+    Args:
+        model: Model to evaluate (its weights are not changed).
+        tokenizer: Tokenizer matching the model.
+        dataset: Prompt-completion dataset (see `src.formatting.to_sft_format`).
+        config: Experiment configuration.
+
+    Returns:
+        The mean evaluation loss.
+    """
+    with tempfile.TemporaryDirectory() as output_dir:
+        sft_config = SFTConfig(
+            output_dir=output_dir,
+            per_device_eval_batch_size=config.training.eval_batch_size,
+            completion_only_loss=True,
+            max_length=config.model.max_seq_len,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model=model,
+            args=sft_config,
+            # SFTTrainer requires a train_dataset; nothing is trained here
+            train_dataset=dataset,
+            eval_dataset=dataset,
+            processing_class=tokenizer,
+        )
+        metrics: dict[str, float] = trainer.evaluate()
+
+    return metrics["eval_loss"]

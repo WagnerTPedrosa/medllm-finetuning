@@ -1,0 +1,33 @@
+{
+  "judge_model": "Qwen/Qwen3.8-27B",
+  "bases": {
+    "original": {
+      "test_medtext_geval_correctness": {
+        "mean": 0.1105633802816901,
+        "std": 0.022786886883610497
+      },
+      "test_medtext_geval_completeness": {
+        "mean": 0.11126760563380278,
+        "std": 0.023557364343208088
+      },
+      "test_medtext_geval_coherence": {
+        "mean": 0.48943661971831,
+        "std": 0.008823918370522202
+      }
+    },
+    "dapt": {
+      "test_medtext_geval_correctness": {
+        "mean": 0.10399061032863846,
+        "std": 0.014877889086845867
+      },
+      "test_medtext_geval_completeness": {
+        "mean": 0.09741784037558682,
+        "std": 0.012365790789733273
+      },
+      "test_medtext_geval_coherence": {
+        "mean": 0.49436619718309893,
+        "std": 0.0481918651011991
+      }
+    }
+  }
+}

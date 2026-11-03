@@ -1,0 +1,43 @@
+{
+  "dataset_id": "BI55/MedText",
+  "revision": "96d57f97ae609ff352aa97609a8d612db2d1c0f1",
+  "seed": 42,
+  "tokenizer": "openai-community/gpt2",
+  "max_seq_len": 1024,
+  "rows": {
+    "raw": 1412,
+    "after_empty_removal": 1412,
+    "after_dedup": 1412,
+    "after_length_filter": 1412
+  },
+  "removed_too_long": 0,
+  "splits": {
+    "train": {
+      "rows": 1129,
+      "n_tokens": {
+        "min": 43,
+        "mean": 143.9,
+        "p95": 187,
+        "max": 236
+      }
+    },
+    "validation": {
+      "rows": 141,
+      "n_tokens": {
+        "min": 56,
+        "mean": 141.5,
+        "p95": 185,
+        "max": 229
+      }
+    },
+    "test": {
+      "rows": 142,
+      "n_tokens": {
+        "min": 58,
+        "mean": 144.9,
+        "p95": 178,
+        "max": 206
+      }
+    }
+  }
+}

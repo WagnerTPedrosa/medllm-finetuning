@@ -1,0 +1,63 @@
+# Full-parameter fine-tuning of GPT-2 on MedText.
+# Floats need a decimal point (1.0e-5, not 1e-5): PyYAML reads 1e-5 as a string.
+
+seed: 42
+
+mlflow:
+  tracking_uri: sqlite:///mlflow.db
+  experiment_name: gpt2-medtext-fine-tuned
+  # Model Registry name for the best fine-tuned model of each search
+  registered_model_name: gpt2-medtext-sft
+  # CPU, RAM and GPU usage per run (needs nvidia-ml-py for the GPU)
+  log_system_metrics: true
+
+model:
+  model_id: openai-community/gpt2
+  # GPT-2 context window (n_positions)
+  max_seq_len: 1024
+
+data:
+  dataset_id: BI55/MedText
+  processed_dir: data/processed/medtext_v1
+  # Fraction held out from training, split equally into validation and test
+  holdout_fraction: 0.2
+
+training:
+  # Upper bound; early stopping usually ends training sooner
+  max_epochs: 20
+  early_stopping_patience: 2
+  # Fixed so every reported loss (baseline, trials, test) is averaged the same way
+  eval_batch_size: 8
+  max_grad_norm: 1.0
+  # Defaults for hyperparameters a search does not set
+  weight_decay: 0.01
+  lr_scheduler_type: constant
+  warmup_ratio: 0.0
+
+grid_search:
+  param_grid:
+    learning_rate: [1.0e-5, 2.0e-5, 5.0e-5]
+    batch_size: [2, 8, 16]
+  best_checkpoint_dir: checkpoints/gpt2-medtext-best
+  results_path: experiments/hpo_results.json
+  trials_dir: checkpoints/trials
+
+optuna:
+  n_trials: 20
+  # A mapping with low/high is a float range; a list is a categorical choice
+  search_space:
+    learning_rate: {low: 1.0e-5, high: 1.0e-4, log: true}
+    batch_size: [2, 4, 8, 16]
+    weight_decay: [0.0, 0.01, 0.1]
+    lr_scheduler_type: [constant, cosine]
+    warmup_ratio: [0.0, 0.1]
+  # Let this many trials finish before pruning anything
+  pruner_startup_trials: 5
+  # Never prune during the first N epochs of a trial
+  pruner_warmup_epochs: 1
+  best_checkpoint_dir: checkpoints/gpt2-medtext-optuna-best
+  results_path: experiments/optuna_results.json
+  trials_dir: checkpoints/optuna_trials
+
+generation:
+  max_new_tokens: 256

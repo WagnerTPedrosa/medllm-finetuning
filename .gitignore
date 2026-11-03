@@ -23,7 +23,21 @@ htmlcov/
 
 # Generated model checkpoints
 /checkpoints/
+/mlruns/
+/mlflow.db*
 
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Hugging Face datasets caches
+data/processed/**/cache-*.arrow
+
+# Tokenized pretraining corpus (several GB, rebuilt by src/corpus.py)
+data/processed/pubmed_*/
+
+# Multitask fine-tuning data (rebuilt by src/multitask.py)
+data/processed/multitask_*/
+
+# Training logs (metrics and curves are tracked in MLflow)
+*.log

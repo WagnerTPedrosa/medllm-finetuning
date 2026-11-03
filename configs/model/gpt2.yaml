@@ -1,0 +1,30 @@
+# @package _global_
+# GPT-2 small (124M). Values chosen with the sweeps of the first experiment.
+
+model:
+  name: gpt2
+  model_id: openai-community/gpt2
+  # GPT-2 context window (n_positions)
+  max_seq_len: 1024
+
+pretraining:
+  # Best rate of lr_sweep (3e-4 beat 5e-5 and 1e-4 after 150 steps)
+  learning_rate: 3.0e-4
+  # 32 x 16 blocks of 1024 tokens, about 0.5M tokens per optimizer step
+  per_device_batch_size: 32
+  gradient_accumulation_steps: 16
+  eval_batch_size: 64
+  gradient_checkpointing: false
+
+lr_sweep:
+  learning_rates: [5.0e-5, 1.0e-4, 3.0e-4]
+
+finetune:
+  # Best trial of the multitask sweep
+  learning_rate: 8.0e-5
+  batch_size: 16
+  gradient_checkpointing: false
+
+sweep:
+  search_space:
+    learning_rate: {low: 1.0e-5, high: 3.0e-4, log: true}
