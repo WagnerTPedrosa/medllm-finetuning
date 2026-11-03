@@ -2,12 +2,18 @@ from pathlib import Path
 
 import optuna
 import pytest
-from transformers import TrainerControl, TrainerState, TrainingArguments
+import torch
+from peft import LoraConfig, PeftModel, get_peft_model
+from transformers import GPT2Config, GPT2LMHeadModel, TrainerControl, TrainerState, TrainingArguments
 
 from src.config import FloatRange, MultitaskConfig, load_multitask_config
 from src.multitask_train import (
     StopAfterStepsCallback,
     base_model_id,
+    build_peft_config,
+    correctness,
+    finetune_stage,
+    merge_lora,
     build_multitask_sft_config,
     epoch_metrics,
     steps_per_epoch,
@@ -147,7 +153,7 @@ def test_sweep_results_lists_complete_and_pruned_trials() -> None:
             params={"batch_size": 16},
             distributions=distributions,
             value=2.0,
-            user_attrs={"dev_combined_curve": [2.3, 2.0], "mlflow_run_id": "a"},
+            user_attrs={"validation_combined_curve": [2.3, 2.0], "mlflow_run_id": "a"},
         )
     )
     study.add_trial(
@@ -155,15 +161,15 @@ def test_sweep_results_lists_complete_and_pruned_trials() -> None:
             params={"batch_size": 8},
             distributions=distributions,
             state=optuna.trial.TrialState.PRUNED,
-            user_attrs={"dev_combined_curve": [2.9], "mlflow_run_id": "b"},
+            user_attrs={"validation_combined_curve": [2.9], "mlflow_run_id": "b"},
         )
     )
 
     rows = sweep_results(study)
 
     assert [row["status"] for row in rows] == ["complete", "pruned"]
-    assert rows[0]["best_dev_combined_loss"] == 2.0
-    assert rows[1]["best_dev_combined_loss"] == 2.9
+    assert rows[0]["best_validation_combined_loss"] == 2.0
+    assert rows[1]["best_validation_combined_loss"] == 2.9
     assert rows[0]["batch_size"] == 16
 
 
@@ -185,7 +191,7 @@ def test_base_model_id_starts_dapt_from_the_pretrained_model() -> None:
     config = load()
 
     assert base_model_id(config, "original") == config.model.model_id
-    assert base_model_id(config, "dapt") == "models:/gpt2-pubmed-dapt@candidate"
+    assert base_model_id(config, "dapt") == "models:/qwen3-1.7b-pubmed-dapt@candidate"
 
 
 def test_base_model_id_rejects_an_unknown_base() -> None:
@@ -199,3 +205,40 @@ def test_build_multitask_sft_config_follows_gradient_checkpointing(tmp_path: Pat
     sft_config = build_multitask_sft_config(config, tmp_path, seed=1, epoch_steps=10)
 
     assert sft_config.gradient_checkpointing == config.finetune.gradient_checkpointing
+
+
+def test_build_peft_config_follows_the_lora_settings() -> None:
+    config = load()
+
+    peft_config = build_peft_config(config)
+
+    assert isinstance(peft_config, LoraConfig)
+    assert peft_config.r == config.finetune.lora.r
+    assert peft_config.lora_alpha == config.finetune.lora.alpha
+    assert set(peft_config.target_modules) == set(config.finetune.lora.target_modules)
+
+
+def test_build_peft_config_is_none_for_full_fine_tuning() -> None:
+    assert build_peft_config(load_multitask_config(["finetune.method=full"])) is None
+
+
+def test_finetune_stage_names_the_method_and_the_starting_model() -> None:
+    assert finetune_stage("lora", "original") == "finetune_lora_original"
+
+
+def test_correctness_marks_each_prediction() -> None:
+    assert correctness(["A", "B", "C"], ["A", "C", "C"]) == [1, 0, 1]
+
+
+def test_merged_lora_model_matches_the_adapter_model(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    base = GPT2LMHeadModel(GPT2Config(n_layer=1, n_head=2, n_embd=16)).eval()
+    lora = LoraConfig(r=4, lora_alpha=8, target_modules=["c_attn"], init_lora_weights=False)
+    adapted = get_peft_model(base, lora)
+    inputs = torch.tensor([[1, 2, 3]])
+    expected = adapted(inputs).logits
+
+    merged = merge_lora(adapted)
+
+    assert not isinstance(merged, PeftModel)
+    assert torch.allclose(merged(inputs).logits, expected, atol=1e-5)

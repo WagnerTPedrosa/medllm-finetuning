@@ -1,19 +1,24 @@
-"""Multitask fine-tuning (MedText + PubMedQA + MedMCQA) and its evaluation.
+"""Multitask fine-tuning (MedText, PubMedQA, MedMCQA, MedQA) and its evaluation.
 
-Run from the repository root (Hydra overrides pick the base model; GPT-2 by default):
+Run from the repository root (Hydra overrides pick the base model; Qwen3-1.7B by default):
 
-    uv run python -m src.multitask_train --base original model=qwen3-1.7b
-    uv run python -m src.multitask_train --base dapt model=qwen3-1.7b
-    uv run python -m src.multitask_train --sweep model=qwen3-1.7b
+    uv run python -m src.multitask_train --baseline
+    uv run python -m src.multitask_train --base original
+    uv run python -m src.multitask_train --base dapt finetune.method=full
+    uv run python -m src.multitask_train --sweep
 
-`--base original` fine-tunes the Hub model, `--base dapt` the PubMed-pretrained
-one (`finetune.dapt_model_id`). A full run writes `results/<model>/finetune_<base>.json`.
+`--baseline` scores the model without fine-tuning (zero-shot). `--base original`
+fine-tunes the Hub model, `--base dapt` the PubMed-pretrained one
+(`finetune.dapt_model_id`), with LoRA or full fine-tuning (`finetune.method`).
+Results go to `results/<model>/baseline.json` and
+`results/<model>/finetune_<method>_<base>.json`, with each test answer marked
+right or wrong for the confidence intervals of the report.
 
 Each seed in `finetune.seeds` trains one model as a nested MLflow run under a
-`multitask-<base>` run. The training set holds `training.max_epochs` mixture
-epochs; the model is evaluated on the combined dev set after every mixture
-epoch, early stopping keeps the best one, and that model is scored on the
-three test sets.
+`multitask-<method>-<base>` run. The training set is the mixture of
+`mixture.epochs` epochs built from the unique `train_*` examples; the model is evaluated on the combined validation set after every
+mixture epoch, early stopping keeps the best one (LoRA adapters are merged
+into the model), and that model is scored on the four test sets.
 """
 
 import argparse
@@ -21,7 +26,7 @@ import json
 import math
 import shutil
 import statistics
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from functools import partial
 from operator import itemgetter
 from pathlib import Path
@@ -31,6 +36,7 @@ import mlflow
 import optuna
 import torch
 from datasets import Dataset, DatasetDict
+from peft import LoraConfig, PeftModel
 from transformers import (
     AutoTokenizer,
     EarlyStoppingCallback,
@@ -43,16 +49,20 @@ from transformers import (
 )
 from trl import SFTConfig, SFTTrainer
 
-from src.choice_eval import evaluate_choice_task
+from src.choice_eval import evaluate_choice_task, evaluate_open_choice_task
 from src.config import Hyperparameters, MultitaskConfig, load_multitask_config
 from src.evaluation import evaluate
 from src.modeling import get_device, load_causal_lm, resolve_model_source
-from src.multitask import MEDMCQA_LETTERS, PUBMEDQA_DECISIONS, load_multitask
+from src.multitask import PUBMEDQA_DECISIONS, build_mixture, load_multitask
 from src.report import BASES, save_stage_result
 from src.tracking import configure_tracking, log_best_model, start_stage_run
 from src.train import OptunaPruningCallback, free_gpu_memory, suggest_hyperparameters
 
-DEV_SETS = ("combined", "medtext", "pubmedqa", "medmcqa")
+VALIDATION_SETS = ("combined", "medtext", "pubmedqa", "medmcqa", "medqa")
+# Scored by picking the most likely answer: PubMedQA among its fixed decisions,
+# the open MedMCQA and MedQA questions among each question's own options
+FIXED_CHOICE_TASKS: dict[str, tuple[str, ...]] = {"pubmedqa": PUBMEDQA_DECISIONS}
+OPEN_CHOICE_TASKS = ("medmcqa", "medqa")
 SFT_COLUMNS = ["prompt", "completion"]
 LOGGING_STEPS = 500
 
@@ -92,7 +102,7 @@ def build_multitask_sft_config(
         hyperparameters: Values that override `default_hyperparameters`
             (sweep trials).
         save_models: Keep checkpoints and reload the best one at the end;
-            sweep trials only need the dev losses.
+            sweep trials only need the validation losses.
 
     Returns:
         The SFTTrainer configuration (model selection on `eval_combined_loss`).
@@ -123,16 +133,18 @@ def build_multitask_sft_config(
         greater_is_better=False,
         bf16=torch.cuda.is_available(),
         gradient_checkpointing=config.finetune.gradient_checkpointing,
+        # The non-reentrant variant also works when only LoRA adapters need gradients
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         seed=seed,
         report_to="mlflow",
     )
 
 
-def epoch_metrics(log_history: list[dict[str, float]], dev_sets: list[str]) -> dict[str, list[float]]:
-    """Dev loss after every evaluation, per dev set (e.g. `{"combined": [2.2, 2.0]}`)."""
+def epoch_metrics(log_history: list[dict[str, float]], validation_sets: list[str]) -> dict[str, list[float]]:
+    """Validation loss after every evaluation, per validation set (e.g. `{"combined": [2.2, 2.0]}`)."""
     return {
         name: [log[f"eval_{name}_loss"] for log in log_history if f"eval_{name}_loss" in log]
-        for name in dev_sets
+        for name in validation_sets
     }
 
 
@@ -150,48 +162,96 @@ def summarize_seeds(results: list[dict[str, Any]]) -> dict[str, dict[str, float]
     }
 
 
+@dataclass(frozen=True)
+class TaskEvaluation:
+    """Metrics of a model, and which test answers it got right (for confidence intervals)."""
+
+    metrics: dict[str, float]
+    # Per choice task, 1 or 0 for every example, in dataset order
+    correct: dict[str, list[int]]
+
+
+def correctness(predictions: list[str], labels: list[str]) -> list[int]:
+    """1 where the prediction equals the gold label, else 0."""
+    return [int(prediction == label) for prediction, label in zip(predictions, labels)]
+
+
 def evaluate_on_tasks(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
     splits: DatasetDict,
     config: MultitaskConfig,
     prefix: str,
-) -> dict[str, float]:
-    """Score a model on the MedText, PubMedQA and MedMCQA splits with a prefix.
+) -> TaskEvaluation:
+    """Score a model on the MedText split and the choice tasks, with a prefix.
 
     Args:
         model: Model to evaluate.
         tokenizer: Tokenizer matching the model.
-        splits: Splits written by `prepare_multitask`.
+        splits: Splits written by `src.multitask filter_length`.
         config: Multitask configuration.
-        prefix: `test` (final results) or `dev` (model selection, sweeps).
+        prefix: `test` (final results) or `validation` (model selection, sweeps).
 
     Returns:
-        `<prefix>_medtext_loss`, and accuracy and macro F1 for PubMedQA and MedMCQA.
+        `<prefix>_medtext_loss`, and accuracy and macro F1 for PubMedQA, MedMCQA
+        and MedQA, plus each answer marked right or wrong.
     """
     device: torch.device = next(model.parameters()).device
     medtext: Dataset = splits[f"{prefix}_medtext"].select_columns(SFT_COLUMNS)
-    pubmedqa = evaluate_choice_task(
-        model, tokenizer, splits[f"{prefix}_pubmedqa"], list(PUBMEDQA_DECISIONS), device
-    )
-    medmcqa = evaluate_choice_task(
-        model, tokenizer, splits[f"{prefix}_medmcqa"], list(MEDMCQA_LETTERS), device
-    )
-    return {
-        f"{prefix}_medtext_loss": evaluate(model, tokenizer, medtext, config),
-        f"{prefix}_pubmedqa_accuracy": pubmedqa["accuracy"],
-        f"{prefix}_pubmedqa_macro_f1": pubmedqa["macro_f1"],
-        f"{prefix}_medmcqa_accuracy": medmcqa["accuracy"],
-        f"{prefix}_medmcqa_macro_f1": medmcqa["macro_f1"],
-    }
+    metrics: dict[str, float] = {f"{prefix}_medtext_loss": evaluate(model, tokenizer, medtext, config)}
+    correct: dict[str, list[int]] = {}
+    # Scoring computes log-probabilities over the whole vocabulary: small batches keep memory low
+    batch_size: int = config.training.eval_batch_size
+    for task in (*FIXED_CHOICE_TASKS, *OPEN_CHOICE_TASKS):
+        dataset: Dataset = splits[f"{prefix}_{task}"]
+        if task in FIXED_CHOICE_TASKS:
+            choices: list[str] = list(FIXED_CHOICE_TASKS[task])
+            result = evaluate_choice_task(model, tokenizer, dataset, choices, device, batch_size=batch_size)
+        else:
+            result = evaluate_open_choice_task(model, tokenizer, dataset, device, batch_size=batch_size)
+        metrics[f"{prefix}_{task}_accuracy"] = result["accuracy"]
+        metrics[f"{prefix}_{task}_macro_f1"] = result["macro_f1"]
+        correct[task] = correctness(result["predictions"], dataset["label"])
+    return TaskEvaluation(metrics=metrics, correct=correct)
 
 
-def evaluate_model(model_id: str, config: MultitaskConfig, prefix: str = "test") -> dict[str, float]:
+def evaluate_model(model_id: str, config: MultitaskConfig, prefix: str = "test") -> TaskEvaluation:
     """Load a model (Hub id, path or MLflow URI) and score it with `evaluate_on_tasks`."""
     source: str = resolve_model_source(model_id)
     model = load_causal_lm(source).to(get_device())
     tokenizer = AutoTokenizer.from_pretrained(source)
     return evaluate_on_tasks(model, tokenizer, load_multitask(config.multitask.processed_dir), config, prefix)
+
+
+def build_peft_config(config: MultitaskConfig) -> LoraConfig | None:
+    """LoRA adapters from `finetune.lora` when `finetune.method` is `lora`, else None."""
+    if config.finetune.method != "lora":
+        return None
+    lora = config.finetune.lora
+    return LoraConfig(
+        r=lora.r,
+        lora_alpha=lora.alpha,
+        lora_dropout=lora.dropout,
+        target_modules=list(lora.target_modules),
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+
+
+def merge_lora(model: PreTrainedModel | PeftModel) -> PreTrainedModel:
+    """Fold LoRA adapters into the base weights; a model without adapters is returned as is.
+
+    The merged model is a plain checkpoint, so evaluation, generation and the
+    Model Registry handle LoRA and fully fine-tuned models the same way.
+    """
+    if isinstance(model, PeftModel):
+        return model.merge_and_unload()
+    return model
+
+
+def finetune_stage(method: str, base: str) -> str:
+    """Name of the stage result file (`finetune_lora_original`)."""
+    return f"finetune_{method}_{base}"
 
 
 def base_model_id(config: MultitaskConfig, base: str) -> str:
@@ -221,60 +281,61 @@ def train_multitask(
         config: Multitask configuration.
         model_id: Base model (Hub id, path or MLflow URI).
         seed: Random seed.
-        splits: Splits written by `prepare_multitask`.
+        splits: Splits written by `src.multitask filter_length`.
 
     Returns:
-        Run id, model directory, number of mixture epochs trained, best dev
+        Run id, model directory, number of mixture epochs trained, best validation
         loss and the test metrics.
     """
-    stats: dict[str, Any] = json.loads(
-        (Path(config.multitask.processed_dir) / "stats.json").read_text()
-    )
-    epoch_steps: int = steps_per_epoch(stats["examples_per_epoch"], config.finetune.batch_size)
-    output_dir = Path(config.finetune.output_dir) / f"{model_label(model_id)}-seed{seed}"
+    train_set: Dataset = build_mixture(splits, config.mixture, config.seed)
+    examples_per_epoch: int = len(train_set) // config.mixture.epochs
+    epoch_steps: int = steps_per_epoch(examples_per_epoch, config.finetune.batch_size)
+    method: str = config.finetune.method
+    output_dir = Path(config.finetune.output_dir) / method / f"{model_label(model_id)}-seed{seed}"
     source: str = resolve_model_source(model_id)
 
     with start_stage_run(
         "finetune",
-        f"multitask-{model_label(model_id)}-seed{seed}",
+        f"multitask-{method}-{model_label(model_id)}-seed{seed}",
         config,
-        {"task": "multitask", "finetune_seed": str(seed), "base_model": model_id},
+        {"task": "multitask", "finetune_seed": str(seed), "base_model": model_id, "finetune_method": method},
         nested=mlflow.active_run() is not None,
     ) as run:
-        mlflow.log_params({"examples_per_epoch": stats["examples_per_epoch"], "epoch_steps": epoch_steps})
+        mlflow.log_params({"examples_per_epoch": examples_per_epoch, "epoch_steps": epoch_steps})
         trainer = SFTTrainer(
             model=load_causal_lm(source),
             args=build_multitask_sft_config(config, output_dir, seed, epoch_steps),
-            train_dataset=splits["train"].select_columns(SFT_COLUMNS),
-            eval_dataset={name: splits[f"dev_{name}"].select_columns(SFT_COLUMNS) for name in DEV_SETS},
+            train_dataset=train_set.select_columns(SFT_COLUMNS),
+            eval_dataset={name: splits[f"validation_{name}"].select_columns(SFT_COLUMNS) for name in VALIDATION_SETS},
             processing_class=AutoTokenizer.from_pretrained(source),
             callbacks=[EarlyStoppingCallback(config.training.early_stopping_patience)],
+            peft_config=build_peft_config(config),
         )
         trainer.train()
 
-        curves: dict[str, list[float]] = epoch_metrics(trainer.state.log_history, list(DEV_SETS))
+        curves: dict[str, list[float]] = epoch_metrics(trainer.state.log_history, list(VALIDATION_SETS))
         best_dir: Path = output_dir / "best"
-        trainer.save_model(str(best_dir))
-        test_metrics: dict[str, float] = evaluate_on_tasks(
-            trainer.model, trainer.processing_class, splits, config, "test"
-        )
+        model: PreTrainedModel = merge_lora(trainer.model)
+        model.save_pretrained(str(best_dir))
+        trainer.processing_class.save_pretrained(str(best_dir))
+        evaluation: TaskEvaluation = evaluate_on_tasks(model, trainer.processing_class, splits, config, "test")
         summary: dict[str, float] = {
-            "best_dev_combined_loss": min(curves["combined"]),
+            "best_validation_combined_loss": min(curves["combined"]),
             "mixture_epochs_trained": len(curves["combined"]),
-            **test_metrics,
+            **evaluation.metrics,
         }
         mlflow.log_metrics(summary)
 
-    return {"run_id": run.info.run_id, "model_dir": str(best_dir), **summary}
+    return {"run_id": run.info.run_id, "model_dir": str(best_dir), **summary, "correct": evaluation.correct}
 
 
 def run_multitask_seeds(config: MultitaskConfig, base: str) -> dict[str, Any]:
     """Fine-tune every seed in `finetune.seeds` from one starting point and summarize them.
 
-    Logs a `multitask-<model>` MLflow run with the configuration, the mean and
-    standard deviation of every metric, and one nested run per seed. The seed
-    with the lowest dev loss is registered as
-    `models:/<registered_model_name>@<base>-best`.
+    Logs a `multitask-<method>-<model>` MLflow run with the configuration, the
+    mean and standard deviation of every metric, and one nested run per seed.
+    The seed with the lowest validation loss is registered as
+    `models:/<registered_model_name>@<method>-<base>-best`.
 
     Args:
         config: Multitask configuration.
@@ -282,43 +343,72 @@ def run_multitask_seeds(config: MultitaskConfig, base: str) -> dict[str, Any]:
 
     Returns:
         The starting model, the parent run id, the registered model, per-seed
-        results and their summary.
+        results (with each test answer marked right or wrong) and their summary.
     """
     model_id: str = base_model_id(config, base)
+    method: str = config.finetune.method
     splits: DatasetDict = load_multitask(config.multitask.processed_dir)
     configure_tracking(config)
 
     with start_stage_run(
         "finetune",
-        f"multitask-{model_label(model_id)}",
+        f"multitask-{method}-{model_label(model_id)}",
         config,
-        {"task": "multitask", "base_model": model_id, "finetune_base": base},
+        {"task": "multitask", "base_model": model_id, "finetune_base": base, "finetune_method": method},
     ) as parent:
         mlflow.log_dict(asdict(config), "config.json")
         mlflow.log_artifact(str(Path(config.multitask.processed_dir) / "stats.json"), "data")
         results: list[dict[str, Any]] = [
             train_multitask(config, model_id, seed, splits) for seed in config.finetune.seeds
         ]
+        correct_by_seed: list[dict[str, list[int]]] = [result.pop("correct") for result in results]
         summary = summarize_seeds(results)
         mlflow.log_metrics({f"{key}_mean": value["mean"] for key, value in summary.items()})
         mlflow.log_metrics({f"{key}_std": value["std"] for key, value in summary.items()})
         mlflow.log_dict({"results": results, "summary": summary}, "seed_results.json")
 
-        best = min(results, key=itemgetter("best_dev_combined_loss"))
-        alias = f"{base}-best"
+        best = min(results, key=itemgetter("best_validation_combined_loss"))
+        alias = f"{method}-{base}-best"
         log_best_model(best["run_id"], best["model_dir"], config.mlflow.registered_model_name, alias)
 
     return {
         "base": base,
+        "method": method,
         "model_id": model_id,
         "parent_run_id": parent.info.run_id,
         "registered_model_uri": f"models:/{config.mlflow.registered_model_name}@{alias}",
         "seeds": [
-            {"seed": seed, "run_id": result["run_id"], "model_dir": result["model_dir"]}
-            for seed, result in zip(config.finetune.seeds, results)
+            {"seed": seed, "run_id": result["run_id"], "model_dir": result["model_dir"], "correct": correct}
+            for seed, result, correct in zip(config.finetune.seeds, results, correct_by_seed)
         ],
         "results": results,
         "summary": summary,
+    }
+
+
+def run_baseline(config: MultitaskConfig) -> dict[str, Any]:
+    """Score the model without fine-tuning (zero-shot) on the test sets, as an `evaluate` run.
+
+    Returns:
+        The model, the run id, its test answers marked right or wrong (as a
+        single "seed", like the fine-tuning results) and its metrics.
+    """
+    model_id: str = config.model.model_id
+    configure_tracking(config)
+    with start_stage_run(
+        "evaluate",
+        f"zero-shot-{model_label(model_id)}",
+        config,
+        {"task": "multitask", "evaluated_model": model_id, "split": "test"},
+    ) as run:
+        evaluation: TaskEvaluation = evaluate_model(model_id, config, "test")
+        mlflow.log_metrics(evaluation.metrics)
+
+    return {
+        "model_id": model_id,
+        "run_id": run.info.run_id,
+        "seeds": [{"seed": None, "run_id": run.info.run_id, "correct": evaluation.correct}],
+        "summary": {key: {"mean": value, "std": 0.0} for key, value in evaluation.metrics.items()},
     }
 
 
@@ -346,10 +436,10 @@ def sweep_eval_steps(num_examples: int, batch_size: int, evaluations: int) -> in
 
 
 def sweep_results(study: optuna.Study) -> list[dict[str, Any]]:
-    """One row per finished trial: number (1-based), status, hyperparameters, best dev loss."""
+    """One row per finished trial: number (1-based), status, hyperparameters, best validation loss."""
     rows: list[dict[str, Any]] = []
     for trial in study.get_trials(deepcopy=False):
-        curve: list[float] = trial.user_attrs.get("dev_combined_curve", [])
+        curve: list[float] = trial.user_attrs.get("validation_combined_curve", [])
         if not curve:
             continue
         rows.append(
@@ -358,7 +448,7 @@ def sweep_results(study: optuna.Study) -> list[dict[str, Any]]:
                 "status": trial.state.name.lower(),
                 "mlflow_run_id": trial.user_attrs.get("mlflow_run_id"),
                 **trial.params,
-                "best_dev_combined_loss": min(curve),
+                "best_validation_combined_loss": min(curve),
                 "evaluations": len(curve),
             }
         )
@@ -377,11 +467,11 @@ def write_sweep_results(
 def sweep_objective(
     trial: optuna.Trial, config: MultitaskConfig, splits: DatasetDict, model_source: str
 ) -> float:
-    """Train one trial on the sweep budget and return its best combined dev loss.
+    """Train one trial on the sweep budget and return its best combined validation loss.
 
     The schedule (warmup, decay) is set for the whole mixture, as in a full
     run, and the trial stops after `sweep.train_epochs` mixture epochs. It is
-    evaluated `sweep.evals_per_epoch` times per epoch on the dev sets only (no
+    evaluated `sweep.evals_per_epoch` times per epoch on the validation sets only (no
     test data) and can be pruned at every evaluation. Nothing is saved.
 
     Raises:
@@ -391,10 +481,8 @@ def sweep_objective(
     hyperparameters: Hyperparameters = suggest_hyperparameters(trial, sweep.search_space)
     print(f"\nSweep trial {trial.number + 1}/{sweep.n_trials}: {hyperparameters}")
 
-    stats: dict[str, Any] = json.loads(
-        (Path(config.multitask.processed_dir) / "stats.json").read_text()
-    )
-    num_examples: int = int(stats["examples_per_epoch"] * sweep.train_epochs)
+    train_set: Dataset = build_mixture(splits, config.mixture, config.seed)
+    num_examples: int = int(len(train_set) // config.mixture.epochs * sweep.train_epochs)
     evaluations: int = max(1, round(sweep.evals_per_epoch * sweep.train_epochs))
     batch_size: int = int(hyperparameters["batch_size"])
     eval_steps: int = sweep_eval_steps(num_examples, batch_size, evaluations)
@@ -417,10 +505,11 @@ def sweep_objective(
                 config, trial_dir, config.seed, eval_steps, hyperparameters, save_models=False
             ),
             # The whole mixture, so the schedule has the length of a full run
-            train_dataset=splits["train"].select_columns(SFT_COLUMNS),
-            eval_dataset={name: splits[f"dev_{name}"].select_columns(SFT_COLUMNS) for name in DEV_SETS},
+            train_dataset=train_set.select_columns(SFT_COLUMNS),
+            eval_dataset={name: splits[f"validation_{name}"].select_columns(SFT_COLUMNS) for name in VALIDATION_SETS},
             processing_class=AutoTokenizer.from_pretrained(model_source),
             callbacks=[pruning_callback, StopAfterStepsCallback(budget_steps)],
+            peft_config=build_peft_config(config),
         )
         try:
             trainer.train()
@@ -430,9 +519,9 @@ def sweep_objective(
             log_history = pruning_callback.log_history
 
         curve: list[float] = epoch_metrics(log_history, ["combined"])["combined"]
-        trial.set_user_attr("dev_combined_curve", curve)
+        trial.set_user_attr("validation_combined_curve", curve)
         mlflow.set_tag("status", "pruned" if pruned else "complete")
-        mlflow.log_metric("best_dev_combined_loss", min(curve))
+        mlflow.log_metric("best_validation_combined_loss", min(curve))
 
     del trainer
     free_gpu_memory()
@@ -480,9 +569,9 @@ def run_multitask_sweep(config: MultitaskConfig) -> tuple[dict[str, Any], list[d
         completed: list[dict[str, Any]] = [row for row in rows if row["status"] == "complete"]
         if not completed:
             raise ValueError("No sweep trial completed")
-        best: dict[str, Any] = min(completed, key=itemgetter("best_dev_combined_loss"))
+        best: dict[str, Any] = min(completed, key=itemgetter("best_validation_combined_loss"))
         mlflow.log_params({f"best_{name}": value for name, value in study.best_trial.params.items()})
-        mlflow.log_metric("best_dev_combined_loss", best["best_dev_combined_loss"])
+        mlflow.log_metric("best_validation_combined_loss", best["best_validation_combined_loss"])
         mlflow.log_artifact(sweep.results_path)
 
     print("\nBest sweep trial:")
@@ -491,9 +580,12 @@ def run_multitask_sweep(config: MultitaskConfig) -> tuple[dict[str, Any], list[d
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Multitask fine-tuning on MedText, PubMedQA and MedMCQA.")
-    parser.add_argument("overrides", nargs="*", help="Hydra overrides, for example model=qwen3-1.7b")
+    parser = argparse.ArgumentParser(description="Multitask fine-tuning on MedText, PubMedQA, MedMCQA and MedQA.")
+    parser.add_argument("overrides", nargs="*", help="Hydra overrides, for example finetune.method=full")
     parser.add_argument("--base", choices=BASES, default="original", help="Model to fine-tune")
+    parser.add_argument(
+        "--baseline", action="store_true", help="Score the model without fine-tuning instead"
+    )
     parser.add_argument(
         "--sweep", action="store_true", help="Run the Optuna search from the sweep section instead"
     )
@@ -504,8 +596,12 @@ def main() -> None:
         run_multitask_sweep(config)
         return
 
-    outcome = run_multitask_seeds(config, args.base)
-    save_stage_result(config.results_dir, f"finetune_{args.base}", outcome)
+    if args.baseline:
+        outcome = run_baseline(config)
+        save_stage_result(config.results_dir, "baseline", outcome)
+    else:
+        outcome = run_multitask_seeds(config, args.base)
+        save_stage_result(config.results_dir, finetune_stage(config.finetune.method, args.base), outcome)
     print(json.dumps(outcome["summary"], indent=2))
 
 

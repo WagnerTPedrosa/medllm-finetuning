@@ -26,7 +26,9 @@ def test_load_pretrain_config_reads_pretraining_section() -> None:
 
     assert training.lr_scheduler_type == "cosine"
     assert training.bf16 is True
-    assert training.per_device_batch_size * training.gradient_accumulation_steps == 512
+    config = load()
+    tokens_per_step = training.per_device_batch_size * training.gradient_accumulation_steps * config.model.max_seq_len
+    assert tokens_per_step == 524_288  # about 0.5M tokens per optimizer step
 
 
 def test_collate_blocks_uses_input_ids_as_labels_including_eos() -> None:
@@ -86,7 +88,7 @@ def test_perplexity_callback_logs_exp_of_eval_loss(tracking_store: Path) -> None
 def test_load_pretrain_config_reads_lr_sweep_section() -> None:
     sweep = load().lr_sweep
 
-    assert sweep.learning_rates == [5e-5, 1e-4, 3e-4]
+    assert sweep.learning_rates == [1e-5, 3e-5, 1e-4]
     assert all(isinstance(rate, float) for rate in sweep.learning_rates)
     assert sweep.max_steps == 150
 
@@ -97,6 +99,6 @@ def test_with_learning_rate_returns_a_new_config() -> None:
     updated = with_learning_rate(config, 1e-4)
 
     assert updated.pretraining.learning_rate == 1e-4
-    assert config.pretraining.learning_rate == 3e-4
+    assert config.pretraining.learning_rate == 3e-5
     assert updated is not config
     assert updated.corpus == config.corpus

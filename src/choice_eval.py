@@ -1,11 +1,17 @@
-"""Evaluate classification tasks (PubMedQA, MedMCQA) by scoring each possible answer.
+"""Evaluate questions with a known set of answers by scoring each possible answer.
 
-For every question the model scores each choice ("yes"/"no"/"maybe", or
-"A"-"D") as the sum of the log-probabilities of its tokens right after the
-prompt, and the highest-scoring choice is the prediction. This avoids
-parsing generated text, which is unreliable for small models.
+For every question the model scores each choice as the log-probability of its
+tokens right after the prompt, and the highest-scoring choice is the prediction.
+This avoids parsing generated text, which is unreliable for small models.
+
+- Fixed choices (PubMedQA: "yes"/"no"/"maybe"): summed log-probability.
+- Open questions with their own options (MedMCQA, MedQA asked without options):
+  each option text is scored as the answer, divided by its length in characters
+  so long options are not penalized for having more tokens (like `acc_norm` in
+  lm-evaluation-harness). The model never sees the options or their letters.
 """
 
+import json
 from typing import Any
 
 import torch
@@ -48,6 +54,20 @@ def score_batch(
     return scores
 
 
+def score_items(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    items: list[SequenceItem],
+    device: torch.device,
+    batch_size: int,
+) -> list[float]:
+    """Log-probability of the answer tokens of every (token ids, prompt length), in batches."""
+    scores: list[float] = []
+    for start in range(0, len(items), batch_size):
+        scores.extend(score_batch(model, items[start : start + batch_size], tokenizer.eos_token_id, device))
+    return scores
+
+
 def choice_scores(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
@@ -77,16 +97,50 @@ def choice_scores(
         prompt_ids: list[int] = tokenizer.encode(prompt, add_special_tokens=False)
         items.extend((prompt_ids + ids, len(prompt_ids)) for ids in choice_ids)
 
-    flat_scores: list[float] = []
-    for start in range(0, len(items), batch_size):
-        flat_scores.extend(
-            score_batch(model, items[start : start + batch_size], tokenizer.eos_token_id, device)
-        )
-
+    flat_scores: list[float] = score_items(model, tokenizer, items, device, batch_size)
     return [
         flat_scores[start : start + len(choices)]
         for start in range(0, len(flat_scores), len(choices))
     ]
+
+
+def option_scores(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    prompts: list[str],
+    options: list[list[str]],
+    device: torch.device,
+    batch_size: int,
+) -> list[list[float]]:
+    """Score each prompt's own options as answers, per character of the option.
+
+    Args:
+        model: Causal language model (in eval mode).
+        tokenizer: Tokenizer matching the model.
+        prompts: Open questions, ending right where the answer starts.
+        options: The option texts of each prompt.
+        device: Device the model is on.
+        batch_size: Sequences per forward pass.
+
+    Returns:
+        One list of scores (log-probability / characters) per prompt.
+    """
+    items: list[SequenceItem] = []
+    lengths: list[int] = []
+    for prompt, prompt_options in zip(prompts, options):
+        prompt_ids: list[int] = tokenizer.encode(prompt, add_special_tokens=False)
+        for option in prompt_options:
+            items.append((prompt_ids + tokenizer.encode(option, add_special_tokens=False), len(prompt_ids)))
+            lengths.append(max(1, len(option)))
+
+    flat_scores: list[float] = score_items(model, tokenizer, items, device, batch_size)
+    normalized: list[float] = [score / length for score, length in zip(flat_scores, lengths)]
+    grouped: list[list[float]] = []
+    start = 0
+    for prompt_options in options:
+        grouped.append(normalized[start : start + len(prompt_options)])
+        start += len(prompt_options)
+    return grouped
 
 
 def classification_metrics(
@@ -126,3 +180,35 @@ def evaluate_choice_task(
     )
     predictions: list[str] = [choices[row.index(max(row))] for row in scores]
     return {**classification_metrics(dataset["label"], predictions, choices), "predictions": predictions}
+
+
+def evaluate_open_choice_task(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    dataset: Dataset,
+    device: torch.device,
+    batch_size: int = 32,
+    letters: str = "ABCD",
+) -> dict[str, Any]:
+    """Predict the best of each open question's own options and score the predictions.
+
+    Args:
+        model: Causal language model.
+        tokenizer: Tokenizer matching the model.
+        dataset: Examples with an open `prompt`, `options` (JSON list of option
+            texts) and the gold `label` (letter of the correct option).
+        device: Device the model is on.
+        batch_size: Sequences per forward pass.
+        letters: Letters of the options, in order.
+
+    Returns:
+        `accuracy`, `macro_f1` (over the option letters) and the predicted letters.
+    """
+    model.eval()
+    options: list[list[str]] = [json.loads(value) for value in dataset["options"]]
+    scores = option_scores(model, tokenizer, dataset["prompt"], options, device, batch_size)
+    predictions: list[str] = [letters[row.index(max(row))] for row in scores]
+    return {
+        **classification_metrics(dataset["label"], predictions, list(letters[: len(options[0])])),
+        "predictions": predictions,
+    }

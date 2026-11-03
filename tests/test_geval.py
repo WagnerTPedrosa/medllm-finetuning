@@ -16,6 +16,7 @@ from src.geval import (
     JudgeServer,
     build_serve_command,
     build_test_cases,
+    mean_scores_per_example,
     score_test_cases,
     server_is_up,
     summarize_geval,
@@ -156,3 +157,14 @@ def test_judge_server_stops_a_server_that_never_gets_ready(tmp_path: Path) -> No
         server.__enter__()
 
     assert server.process is not None and server.process.poll() is not None
+
+
+def test_mean_scores_per_example_averages_the_seeds() -> None:
+    seed_rows = [
+        [{"correctness": 0.2, "correctness_reason": "x"}, {"correctness": 1.0, "correctness_reason": "y"}],
+        [{"correctness": 0.4, "correctness_reason": "z"}, {"correctness": 0.0, "correctness_reason": "w"}],
+    ]
+
+    scores = mean_scores_per_example(seed_rows, ["correctness"])
+
+    assert scores == {"correctness": pytest.approx([0.3, 0.5])}

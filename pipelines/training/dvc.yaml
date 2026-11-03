@@ -1,0 +1,173 @@
+# Training pipeline: PubMed pretraining, LoRA fine-tuning, evaluation and report.
+#
+#   evaluate_zero_shot@<model>       the base model before fine-tuning -> results/<model>/baseline.json
+#   finetune_lora_original@<model>   LoRA on the Hub model -> results/<model>/finetune_lora_original.json
+#   judge_geval@<model>              LLM-as-judge on the MedText answers -> results/<model>/geval.json
+#   report                           comparison tables -> reports/comparison.md
+#   pretrain@, finetune_lora_dapt@   the PubMed branch (frozen)
+# Pipeline v2, Qwen3-1.7B on MedText, PubMedQA, MedMCQA and MedQA
+# (the GPT-2 pipeline is archived at git tag v1-gpt2).
+#
+#   uv run dvc repro pipelines/training/dvc.yaml:report   # report and every stage it needs
+#   uv run dvc repro pipelines/training/dvc.yaml:finetune_lora_original@qwen3-1.7b
+#   uv run dvc status pipelines/training/dvc.yaml         # what would run, and why
+#
+# Name the stage: `dvc repro` of the whole file also checks the frozen
+# pretraining stages, whose outputs do not exist yet, and fails.
+#
+# The stages read the datasets that pipelines/data/dvc.yaml builds; when a
+# dataset is out of date, `dvc repro` rebuilds it first.
+#
+# A stage runs again when its code, its inputs or the config keys under
+# `params` change. Models live in the MLflow Model Registry; each stage writes
+# a small JSON summary to results/<model>/ (run ids, model URIs, metrics and
+# every test answer marked right or wrong) that the next stages read.
+#
+# The PubMed pretraining branch (pretrain, finetune_lora_dapt, plus
+# clean_corpus and tokenize_corpus in the data pipeline) is frozen until the fine-tuning on the
+# original model is settled:
+#   uv run dvc unfreeze pipelines/data/dvc.yaml:clean_corpus \
+#     pipelines/data/dvc.yaml:tokenize_corpus@qwen3-1.7b \
+#     pipelines/training/dvc.yaml:pretrain@qwen3-1.7b \
+#     pipelines/training/dvc.yaml:finetune_lora_dapt@qwen3-1.7b
+# The sweeps (`src.pretrain --sweep`, `src.multitask_train --sweep`) are not
+# stages: their chosen values go into the model file, so the runs here are
+# reproducible from git.
+
+vars:
+  - models:
+      - qwen3-1.7b
+
+stages:
+  pretrain:
+    foreach: ${models}
+    do:
+      frozen: true
+      wdir: ../..
+      cmd: uv run python -m src.pretrain model=${item}
+      deps:
+        - src/pretrain.py
+        - src/modeling.py
+        - src/tracking.py
+        - data/processed/pubmed_${item}
+      params:
+        - configs/config.yaml:
+            - seed
+            - pretraining
+        - configs/model/${item}.yaml:
+            - model
+            - pretraining
+      metrics:
+        - results/${item}/pretrain.json:
+            cache: false
+
+  evaluate_zero_shot:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m src.multitask_train --baseline model=${item}
+      deps:
+        - src/multitask_train.py
+        - src/choice_eval.py
+        - src/evaluation.py
+        - src/modeling.py
+        - data/processed/multitask_${item}
+      params:
+        - configs/config.yaml:
+            - training.eval_batch_size
+        - configs/model/${item}.yaml:
+            - model
+      metrics:
+        - results/${item}/baseline.json:
+            cache: false
+
+  finetune_lora_original:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m src.multitask_train --base original model=${item} finetune.method=lora
+      deps:
+        - src/multitask_train.py
+        - src/choice_eval.py
+        - src/evaluation.py
+        - src/train.py
+        - src/modeling.py
+        - src/tracking.py
+        - data/processed/multitask_${item}
+      params:
+        - configs/config.yaml:
+            - seed
+            - mixture
+            - training
+            - finetune.lora
+        - configs/model/${item}.yaml:
+            - model
+            - finetune
+      metrics:
+        - results/${item}/finetune_lora_original.json:
+            cache: false
+
+  finetune_lora_dapt:
+    foreach: ${models}
+    do:
+      frozen: true
+      wdir: ../..
+      cmd: uv run python -m src.multitask_train --base dapt model=${item} finetune.method=lora
+      deps:
+        - src/multitask_train.py
+        - src/choice_eval.py
+        - src/evaluation.py
+        - src/train.py
+        - src/modeling.py
+        - src/tracking.py
+        - data/processed/multitask_${item}
+        # The pretrained model it starts from
+        - results/${item}/pretrain.json
+      params:
+        - configs/config.yaml:
+            - seed
+            - mixture
+            - training
+            - finetune.lora
+            - finetune.dapt_model_id
+        - configs/model/${item}.yaml:
+            - model
+            - finetune
+      metrics:
+        - results/${item}/finetune_lora_dapt.json:
+            cache: false
+
+  judge_geval:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m src.geval --runs lora_original model=${item}
+      deps:
+        - src/geval.py
+        - src/inference.py
+        - data/processed/multitask_${item}
+        - results/${item}/finetune_lora_original.json
+      params:
+        - configs/config.yaml:
+            - geval.judge_model
+            - geval.max_new_tokens
+            - geval.num_examples
+      metrics:
+        - results/${item}/geval.json:
+            cache: false
+
+  report:
+    # One base model for now; list every model under --models when there are more
+    wdir: ../..
+    cmd: >-
+      uv run python -m src.report --models qwen3-1.7b
+      --data-stats data/processed/multitask_qwen3-1.7b/stats.json
+    deps:
+      - src/report.py
+      - data/processed/multitask_qwen3-1.7b/stats.json
+      - results/qwen3-1.7b/baseline.json
+      - results/qwen3-1.7b/finetune_lora_original.json
+      - results/qwen3-1.7b/geval.json
+    outs:
+      - reports/comparison.md:
+          cache: false

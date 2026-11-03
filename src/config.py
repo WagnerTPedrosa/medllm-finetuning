@@ -16,6 +16,8 @@ from omegaconf import OmegaConf
 # The repository's config directory, wherever the process was started from
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs"
 
+FINETUNE_METHODS = ("lora", "full")
+
 HyperparameterValue = float | int | str
 Hyperparameters = dict[str, HyperparameterValue]
 
@@ -103,6 +105,7 @@ class Config:
 @dataclass(frozen=True)
 class CorpusConfig:
     raw_dir: str
+    clean_dir: str
     processed_dir: str
     validation_fraction: float
     remove_boilerplate_sections: bool
@@ -269,21 +272,43 @@ def load_pretrain_config(overrides: list[str] | None = None) -> PretrainConfig:
 
 
 @dataclass(frozen=True)
+class SourceDataset:
+    """A Hugging Face dataset (and subset) at a fixed revision."""
+
+    dataset_id: str
+    subset: str | None
+    revision: str
+
+
+@dataclass(frozen=True)
+class DatasetsConfig:
+    raw_dir: str
+    sources: dict[str, SourceDataset]
+
+
+@dataclass(frozen=True)
 class MultitaskDataConfig:
+    examples_dir: str
+    splits_dir: str
     processed_dir: str
-    medtext_dir: str
-    pubmedqa_dataset_id: str
     pubmedqa_test_ground_truth: str
+    medtext_holdout_fraction: float
     pubmedqa_validation_size: int
-    medmcqa_dataset_id: str
-    medmcqa_dev_fraction: float
-    mixture_epochs: int
+    medmcqa_validation_size: int
+    medqa_validation_size: int
+    num_proc: int
+
+
+@dataclass(frozen=True)
+class MixtureConfig:
+    """How the unique training examples are repeated and sampled in each epoch."""
+
+    epochs: int
     medtext_repeats: int
     pubmedqa_labeled_repeats: int
     pubmedqa_artificial_per_class: int
     medmcqa_per_epoch: int
-    dev_medmcqa_size: int
-    num_proc: int
+    medqa_repeats: int
 
 
 @dataclass(frozen=True)
@@ -295,11 +320,21 @@ class DataFilterConfig:
 
 
 @dataclass(frozen=True)
+class LoraSettings:
+    r: int
+    alpha: int
+    dropout: float
+    target_modules: list[str]
+
+
+@dataclass(frozen=True)
 class FinetuneConfig:
+    method: str
     learning_rate: float
     batch_size: int
     gradient_checkpointing: bool
     seeds: list[int]
+    lora: LoraSettings
     output_dir: str
     dapt_model_id: str
 
@@ -336,7 +371,9 @@ class MultitaskConfig:
     model: ModelConfig
     training: TrainingConfig
     data_filter: DataFilterConfig
+    datasets: DatasetsConfig
     multitask: MultitaskDataConfig
+    mixture: MixtureConfig
     finetune: FinetuneConfig
     sweep: MultitaskSweepConfig
     geval: GEvalConfig
@@ -351,11 +388,18 @@ def load_multitask_config(overrides: list[str] | None = None) -> MultitaskConfig
 
     Returns:
         The typed configuration (with `~` in `geval.vllm_bin` expanded).
+
+    Raises:
+        ValueError: If `finetune.method` is not one of `FINETUNE_METHODS`.
     """
     raw: dict[str, Any] = compose_config(overrides)
 
     sweep_section: dict[str, Any] = dict(raw["sweep"])
     sweep_section["search_space"] = parse_search_space(sweep_section["search_space"])
+    finetune_section: dict[str, Any] = dict(raw["finetune"])
+    finetune_section["lora"] = LoraSettings(**finetune_section["lora"])
+    if finetune_section["method"] not in FINETUNE_METHODS:
+        raise ValueError(f"finetune.method must be one of {FINETUNE_METHODS}, got {finetune_section['method']!r}")
     geval_section: dict[str, Any] = dict(raw["geval"])
     geval_section["vllm_bin"] = str(Path(geval_section["vllm_bin"]).expanduser())
 
@@ -370,8 +414,13 @@ def load_multitask_config(overrides: list[str] | None = None) -> MultitaskConfig
         model=ModelConfig(model_id=raw["model"]["model_id"], max_seq_len=raw["model"]["max_seq_len"]),
         training=TrainingConfig(**raw["training"]),
         data_filter=DataFilterConfig(**raw["data_filter"]),
+        datasets=DatasetsConfig(
+            raw_dir=raw["datasets"]["raw_dir"],
+            sources={name: SourceDataset(**source) for name, source in raw["datasets"]["sources"].items()},
+        ),
         multitask=MultitaskDataConfig(**raw["multitask"]),
-        finetune=FinetuneConfig(**raw["finetune"]),
+        mixture=MixtureConfig(**raw["mixture"]),
+        finetune=FinetuneConfig(**finetune_section),
         sweep=MultitaskSweepConfig(**sweep_section),
         geval=GEvalConfig(**geval_section),
         results_dir=raw["results_dir"],

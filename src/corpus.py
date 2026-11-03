@@ -1,12 +1,19 @@
-"""Prepare the PubMed corpus for continued pretraining.
+"""Prepare the PubMed corpus for continued pretraining, in two steps.
 
-Steps (the raw JSONL shards are never modified):
+    uv run python -m src.corpus clean                       # model-independent
+    uv run python -m src.corpus tokenize model=qwen3-1.7b   # one base model
+
+clean (the raw JSONL shards are never modified), into `corpus.clean_dir`:
 1. Remove articles used by the evaluation benchmark (decontamination).
 2. Clean the text: drop templated administrative sections and inline citations.
 3. Hold out a validation split, sampled within each MeSH stratum.
+The documents are saved as Parquet (`train.parquet`, `validation.parquet`):
+compressed, which matters at hundreds of thousands of full papers.
+
+tokenize, into `corpus.processed_dir`:
 4. Tokenize, append EOS to every document and pack into fixed-size blocks.
 
-The result is saved with `stats.json` (what each step removed or produced).
+Each step writes a `stats.json` (what it removed or produced).
 """
 
 import argparse
@@ -21,7 +28,7 @@ from typing import Any
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from src.config import PretrainConfig, load_pretrain_config
+from src.config import CorpusConfig, PretrainConfig, load_pretrain_config
 
 HEADING_PREFIX = "## "
 # Leading section numbers such as "5.", "2.1" or "IV."
@@ -72,6 +79,7 @@ AUTHOR_YEAR_CITATION = re.compile(
     r"\s?\((?:[A-Z][\w'’-]+(?:\s+(?:et\s+al\.?|and|&)\s*(?:[A-Z][\w'’-]+)?)?,?\s+\d{4}[a-z]?(?:;\s*)?)+\)"
 )
 SPLIT_NAMES = ("train", "validation")
+STEPS = ("clean", "tokenize")
 
 
 def is_boilerplate_heading(heading: str) -> bool:
@@ -220,34 +228,21 @@ def outside_benchmark(pmids: list[str | None], benchmark_pmids: set[str]) -> lis
     return [pmid not in benchmark_pmids for pmid in pmids]
 
 
-def prepare_corpus(config: PretrainConfig) -> DatasetDict | None:
-    """Decontaminate, clean, split, tokenize and pack the corpus, then save it.
+def clean_corpus_documents(
+    documents: Dataset, benchmark_pmids: set[str], corpus: CorpusConfig, seed: int
+) -> tuple[DatasetDict, dict[str, Any]]:
+    """Decontaminate, clean and split the documents.
 
     Args:
-        config: Pretraining configuration.
+        documents: Raw documents with `pmid`, `pmcid`, `stratum` and `text`.
+        benchmark_pmids: PMIDs of the evaluation benchmark, removed first.
+        corpus: Cleaning options and validation fraction.
+        seed: Random seed of the split.
 
     Returns:
-        The packed `train` and `validation` splits, or None if
-        `config.corpus.processed_dir` already exists.
-
-    Raises:
-        FileNotFoundError: If `config.corpus.raw_dir` has no corpus shards.
+        The `train` and `validation` documents, and what each step removed.
     """
-    corpus = config.corpus
-    output_dir = Path(corpus.processed_dir)
-    if output_dir.exists():
-        print(f"{output_dir} already exists")
-        return None
-
-    shards: list[str] = sorted(glob(str(Path(corpus.raw_dir) / "corpus-*.jsonl")))
-    if not shards:
-        raise FileNotFoundError(f"No corpus-*.jsonl shards in {corpus.raw_dir}")
-    documents: Dataset = load_dataset("json", data_files=shards, split="train")
     raw_documents: int = len(documents)
-
-    benchmark_pmids: set[str] = load_benchmark_pmids(
-        corpus.benchmark_dataset_id, corpus.benchmark_subset
-    )
     documents = documents.filter(
         outside_benchmark,
         input_columns="pmid",
@@ -270,38 +265,10 @@ def prepare_corpus(config: PretrainConfig) -> DatasetDict | None:
         column: sum(documents[column])
         for column in ("chars_raw", "chars_after_sections", "chars_clean")
     }
-
-    splits: DatasetDict = split_by_stratum(
-        documents, corpus.validation_fraction, config.seed
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(config.model.model_id)
-    # Documents are packed into blocks later; the per-document length warning does not apply
-    tokenizer.model_max_length = 10**9
-    tokenized: DatasetDict = splits.map(
-        tokenize_documents,
-        batched=True,
-        num_proc=corpus.num_proc,
-        remove_columns=splits["train"].column_names,
-        fn_kwargs={"tokenizer": tokenizer},
-    )
-    document_tokens: dict[str, int] = {
-        name: sum(len(ids) for ids in split["input_ids"])
-        for name, split in tokenized.items()
-    }
-    packed: DatasetDict = tokenized.map(
-        pack_blocks,
-        batched=True,
-        num_proc=corpus.num_proc,
-        fn_kwargs={"block_size": config.model.max_seq_len},
-    )
+    splits: DatasetDict = split_by_stratum(documents, corpus.validation_fraction, seed)
 
     stats: dict[str, Any] = {
-        "raw_dir": corpus.raw_dir,
-        "shards": len(shards),
-        "tokenizer": config.model.model_id,
-        "block_size": config.model.max_seq_len,
-        "seed": config.seed,
+        "seed": seed,
         "documents": {
             "raw": raw_documents,
             "removed_benchmark": removed_benchmark,
@@ -313,50 +280,119 @@ def prepare_corpus(config: PretrainConfig) -> DatasetDict | None:
             "remove_citations": corpus.remove_citations,
             "chars": char_counts,
             "removed_sections_pct": round(
-                100
-                * (1 - char_counts["chars_after_sections"] / char_counts["chars_raw"]),
-                2,
+                100 * (1 - char_counts["chars_after_sections"] / max(1, char_counts["chars_raw"])), 2
             ),
             "removed_citations_pct": round(
-                100
-                * (
-                    1 - char_counts["chars_clean"] / char_counts["chars_after_sections"]
-                ),
-                2,
+                100 * (1 - char_counts["chars_clean"] / max(1, char_counts["chars_after_sections"])), 2
             ),
         },
-        "tokens": document_tokens,
-        "blocks": {name: len(split) for name, split in packed.items()},
-        "packed_tokens": {
-            name: len(split) * config.model.max_seq_len
-            for name, split in packed.items()
-        },
     }
+    return splits, stats
 
+
+def pack_corpus(
+    splits: DatasetDict, tokenizer: PreTrainedTokenizerBase, block_size: int, num_proc: int
+) -> tuple[DatasetDict, dict[str, Any]]:
+    """Tokenize the documents and pack them into blocks of `block_size` tokens.
+
+    Args:
+        splits: `train` and `validation` documents with a `text` column.
+        tokenizer: Tokenizer of the base model.
+        block_size: Tokens per block (the model's context window).
+        num_proc: Processes for `map`.
+
+    Returns:
+        The packed blocks (`input_ids`) and the token and block counts per split.
+    """
+    tokenized: DatasetDict = splits.map(
+        tokenize_documents,
+        batched=True,
+        num_proc=num_proc,
+        remove_columns=splits["train"].column_names,
+        fn_kwargs={"tokenizer": tokenizer},
+    )
+    packed: DatasetDict = tokenized.map(
+        pack_blocks,
+        batched=True,
+        num_proc=num_proc,
+        fn_kwargs={"block_size": block_size},
+    )
+    stats: dict[str, Any] = {
+        "tokens": {name: sum(len(ids) for ids in split["input_ids"]) for name, split in tokenized.items()},
+        "blocks": {name: len(split) for name, split in packed.items()},
+        "packed_tokens": {name: len(split) * block_size for name, split in packed.items()},
+    }
+    return packed, stats
+
+
+def run_clean_corpus(config: PretrainConfig) -> None:
+    """Step 1: clean the raw shards into `corpus.clean_dir` (Parquet).
+
+    Raises:
+        FileNotFoundError: If `config.corpus.raw_dir` has no corpus shards.
+    """
+    corpus = config.corpus
+    output_dir = Path(corpus.clean_dir)
+    if output_dir.exists():
+        print(f"{output_dir} already exists")
+        return
+
+    shards: list[str] = sorted(glob(str(Path(corpus.raw_dir) / "corpus-*.jsonl")))
+    if not shards:
+        raise FileNotFoundError(f"No corpus-*.jsonl shards in {corpus.raw_dir}")
+    documents: Dataset = load_dataset("json", data_files=shards, split="train")
+    benchmark_pmids: set[str] = load_benchmark_pmids(corpus.benchmark_dataset_id, corpus.benchmark_subset)
+    splits, stats = clean_corpus_documents(documents, benchmark_pmids, corpus, config.seed)
+
+    output_dir.mkdir(parents=True)
+    for name, split in splits.items():
+        split.to_parquet(output_dir / f"{name}.parquet")
+    stats = {"raw_dir": corpus.raw_dir, "shards": len(shards), **stats}
+    (output_dir / "stats.json").write_text(json.dumps(stats, indent=2))
+    (output_dir / "validation_pmcids.json").write_text(json.dumps(sorted(splits["validation"]["pmcid"])))
+    print(json.dumps(stats, indent=2))
+    print(f"Clean corpus saved to {output_dir}")
+
+
+def run_tokenize_corpus(config: PretrainConfig) -> None:
+    """Step 2: tokenize and pack the clean corpus into `corpus.processed_dir`."""
+    corpus = config.corpus
+    output_dir = Path(corpus.processed_dir)
+    if output_dir.exists():
+        print(f"{output_dir} already exists")
+        return
+
+    splits: DatasetDict = load_dataset(
+        "parquet", data_files={name: str(Path(corpus.clean_dir) / f"{name}.parquet") for name in SPLIT_NAMES}
+    )
+    tokenizer = AutoTokenizer.from_pretrained(config.model.model_id)
+    # Documents are packed into blocks later; the per-document length warning does not apply
+    tokenizer.model_max_length = 10**9
+    packed, stats = pack_corpus(splits, tokenizer, config.model.max_seq_len, corpus.num_proc)
+
+    stats = {"clean_dir": corpus.clean_dir, "tokenizer": config.model.model_id, "block_size": config.model.max_seq_len, **stats}
     packed.save_to_disk(str(output_dir))
     (output_dir / "stats.json").write_text(json.dumps(stats, indent=2))
-    (output_dir / "validation_pmcids.json").write_text(
-        json.dumps(sorted(splits["validation"]["pmcid"]))
-    )
-
     print(json.dumps(stats, indent=2))
-    print(f"Corpus saved to {output_dir}")
-    return packed
+    print(f"Packed corpus saved to {output_dir}")
 
 
 def load_pretrain_corpus(processed_dir: str | Path) -> DatasetDict:
-    """Load the packed `train` and `validation` blocks written by `prepare_corpus`."""
+    """Load the packed `train` and `validation` blocks written by `run_tokenize_corpus`."""
     return load_from_disk(str(processed_dir))
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Clean, tokenize and pack the PubMed corpus for one base model."
-    )
+    parser = argparse.ArgumentParser(description="Prepare the PubMed corpus, one step at a time.")
+    parser.add_argument("step", choices=STEPS)
     parser.add_argument("overrides", nargs="*", help="Hydra overrides, for example model=qwen3-1.7b")
     args = parser.parse_args()
 
-    prepare_corpus(load_pretrain_config(args.overrides))
+    config: PretrainConfig = load_pretrain_config(args.overrides)
+    if args.step == "clean":
+        run_clean_corpus(config)
+    else:
+        run_tokenize_corpus(config)
 
 
 if __name__ == "__main__":

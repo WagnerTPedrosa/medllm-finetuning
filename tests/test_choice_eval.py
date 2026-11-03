@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -5,7 +6,13 @@ import torch
 from datasets import Dataset
 from transformers import AutoTokenizer, GPT2Config, GPT2LMHeadModel
 
-from src.choice_eval import choice_scores, classification_metrics, evaluate_choice_task
+from src.choice_eval import (
+    choice_scores,
+    classification_metrics,
+    evaluate_choice_task,
+    evaluate_open_choice_task,
+    option_scores,
+)
 
 TOKENIZER_ID = "openai-community/gpt2"
 
@@ -72,3 +79,32 @@ def test_classification_metrics_reports_accuracy_and_macro_f1() -> None:
     assert metrics["accuracy"] == 0.5
     # per-class F1: yes 0.5, no 0.667, maybe 0
     assert metrics["macro_f1"] == pytest.approx((0.5 + 2 / 3 + 0.0) / 3)
+
+
+def test_option_scores_are_choice_scores_divided_by_the_option_length(tokenizer) -> None:
+    torch.manual_seed(0)
+    model = GPT2LMHeadModel(GPT2Config(n_layer=1, n_head=2, n_embd=16)).eval()
+    prompt, options = "Answer:\n", ["Keratoconus", "Glaucoma"]
+    device = torch.device("cpu")
+
+    scores = option_scores(model, tokenizer, [prompt], [options], device, batch_size=2)
+
+    raw = choice_scores(model, tokenizer, [prompt], options, device, batch_size=2)[0]
+    assert scores[0] == pytest.approx([raw[0] / len(options[0]), raw[1] / len(options[1])], abs=1e-5)
+
+
+def test_evaluate_open_choice_task_predicts_the_letter_of_the_best_option(tokenizer) -> None:
+    no_token = tokenizer.encode("no")[0]
+    model = PreferTokenModel(no_token, tokenizer.vocab_size)
+    dataset = Dataset.from_dict(
+        {
+            "prompt": ["Q1\nAnswer:\n", "Q2\nAnswer:\n"],
+            "options": [json.dumps(["yes", "no", "maybe", "never"]), json.dumps(["no", "yes", "maybe", "never"])],
+            "label": ["B", "B"],
+        }
+    )
+
+    result = evaluate_open_choice_task(model, tokenizer, dataset, torch.device("cpu"), batch_size=4)
+
+    assert result["predictions"] == ["B", "A"]
+    assert result["accuracy"] == 0.5

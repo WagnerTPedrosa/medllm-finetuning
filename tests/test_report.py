@@ -2,7 +2,16 @@ from pathlib import Path
 
 import pytest
 
-from src.report import comparison_markdown, comparison_rows, load_stage_result, save_stage_result
+from src.report import (
+    bootstrap_ci,
+    comparison_markdown,
+    comparison_rows,
+    load_stage_result,
+    majority_accuracy,
+    paired_bootstrap,
+    paired_comparisons_markdown,
+    save_stage_result,
+)
 
 
 def summary(value: float) -> dict[str, float]:
@@ -23,40 +32,121 @@ def test_load_stage_result_names_the_missing_stage(tmp_path: Path) -> None:
         load_stage_result(tmp_path, "finetune_dapt")
 
 
-def test_comparison_rows_has_one_row_per_model_and_base(tmp_path: Path) -> None:
-    for model in ("gpt2", "qwen3-1.7b"):
-        for base in ("original", "dapt"):
-            save_stage_result(
-                tmp_path / model, f"finetune_{base}", {"summary": {"test_pubmedqa_accuracy": summary(0.6)}}
-            )
+def test_bootstrap_ci_of_constant_values_is_that_value() -> None:
+    assert bootstrap_ci([1, 1, 1, 1]) == (1.0, 1.0)
+
+
+def test_bootstrap_ci_contains_the_mean() -> None:
+    values = [1, 0] * 50
+
+    low, high = bootstrap_ci(values)
+
+    assert low < 0.5 < high
+    assert high - low < 0.25
+
+
+def test_paired_bootstrap_finds_no_difference_between_equal_answers() -> None:
+    answers = [1, 0, 1, 1, 0] * 20
+
+    result = paired_bootstrap(answers, answers)
+
+    assert result["delta"] == 0.0
+    assert result["p_value"] == 1.0
+
+
+def test_paired_bootstrap_detects_a_clear_improvement() -> None:
+    before = [0] * 80 + [1] * 20
+    after = [1] * 80 + [1] * 20
+
+    result = paired_bootstrap(before, after)
+
+    assert result["delta"] == pytest.approx(0.8)
+    assert result["low"] > 0
+    assert result["p_value"] < 0.001
+
+
+def test_majority_accuracy_is_the_share_of_the_most_common_label() -> None:
+    assert majority_accuracy({"A": 30, "B": 50, "C": 20}) == 0.5
+
+
+def write_run(directory: Path, stage: str, accuracy: float, correct: list[int]) -> None:
     save_stage_result(
-        tmp_path / "gpt2",
-        "geval",
-        {"bases": {"dapt": {"test_medtext_geval_correctness": summary(0.1)}}},
+        directory,
+        stage,
+        {
+            "seeds": [{"seed": 42, "correct": {"medqa": correct}}],
+            "summary": {"test_medqa_accuracy": summary(accuracy)},
+        },
     )
 
-    rows = comparison_rows(tmp_path)
 
-    assert [(row["model"], row["base"]) for row in rows] == [
-        ("gpt2", "original"),
-        ("gpt2", "dapt"),
-        ("qwen3-1.7b", "original"),
-        ("qwen3-1.7b", "dapt"),
+def test_comparison_rows_puts_zero_shot_first_then_each_fine_tuning(tmp_path: Path) -> None:
+    write_run(tmp_path / "qwen3-1.7b", "baseline", 0.4, [0, 1, 0, 1, 0])
+    write_run(tmp_path / "qwen3-1.7b", "finetune_lora_original", 0.6, [1, 1, 0, 1, 0])
+    save_stage_result(
+        tmp_path / "qwen3-1.7b",
+        "geval",
+        {
+            "bases": {"lora_original": {"test_medtext_geval_correctness": summary(0.3)}},
+            "scores": {"lora_original": {"correctness": [0.2, 0.4]}},
+        },
+    )
+
+    rows = comparison_rows(tmp_path, ["qwen3-1.7b"])
+
+    assert [(row["model"], row["run"]) for row in rows] == [
+        ("qwen3-1.7b", "zero-shot"),
+        ("qwen3-1.7b", "lora_original"),
     ]
-    assert rows[1]["test_pubmedqa_accuracy"] == summary(0.6)
-    assert rows[1]["test_medtext_geval_correctness"] == summary(0.1)
-    assert "test_medtext_geval_correctness" not in rows[0]
+    assert rows[1]["correct"]["medqa"] == [1.0, 1.0, 0.0, 1.0, 0.0]
+    assert rows[1]["geval_scores"]["correctness"] == [0.2, 0.4]
+    assert rows[1]["test_medtext_geval_correctness"] == summary(0.3)
 
 
-def test_comparison_markdown_shows_mean_and_std_and_blanks_missing_metrics() -> None:
+def test_comparison_rows_averages_correctness_over_seeds(tmp_path: Path) -> None:
+    save_stage_result(
+        tmp_path / "m",
+        "finetune_full_original",
+        {
+            "seeds": [{"correct": {"medqa": [1, 0]}}, {"correct": {"medqa": [1, 1]}}],
+            "summary": {},
+        },
+    )
+
+    rows = comparison_rows(tmp_path, ["m"])
+
+    assert rows[0]["correct"]["medqa"] == [1.0, 0.5]
+
+
+def test_comparison_markdown_shows_confidence_intervals_and_blanks_missing_metrics() -> None:
     rows = [
-        {"model": "gpt2", "base": "original", "test_pubmedqa_accuracy": summary(0.6381)},
+        {
+            "model": "qwen3-1.7b",
+            "run": "lora_original",
+            "test_medqa_accuracy": summary(0.6),
+            "correct": {"medqa": [1, 0] * 50},
+            "geval_scores": {},
+        }
     ]
 
-    table = comparison_markdown(rows)
+    table = comparison_markdown(rows, majority={"medqa": 0.28})
 
     lines = table.splitlines()
-    assert lines[0].startswith("| Model | Base |")
-    assert "| gpt2 | original |" in lines[2]
-    assert "0.638 ± 0.010" in lines[2]
+    assert lines[0].startswith("| Model | Run |")
+    assert "| qwen3-1.7b | lora_original |" in lines[2]
+    assert "0.600 [" in lines[2]
     assert "| - |" in lines[2]
+    assert "| chance / majority class |" in lines[3]
+    assert "0.280" in lines[3]
+
+
+def test_paired_comparisons_markdown_compares_each_run_with_zero_shot() -> None:
+    rows = [
+        {"model": "m", "run": "zero-shot", "correct": {"medqa": [0] * 50 + [1] * 50}, "geval_scores": {}},
+        {"model": "m", "run": "lora_original", "correct": {"medqa": [1] * 100}, "geval_scores": {}},
+    ]
+
+    table = paired_comparisons_markdown(rows)
+
+    assert "| m | lora_original | MedQA | +0.500 [" in table
+    assert "<0.001" in table

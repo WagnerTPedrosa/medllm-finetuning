@@ -1,0 +1,126 @@
+# Data pipeline: builds every dataset the training pipeline reads.
+#
+#   raw (downloaded) -> interim (model-independent) -> processed (per base model)
+#
+#   download                   the fine-tuning datasets at pinned revisions -> data/raw/
+#   build_examples             prompt/completion examples, official tests apart -> data/interim/multitask/examples/
+#   split                      validation sets held out -> data/interim/multitask/splits/
+#   filter_length@<model>      examples that fit the model's context -> data/processed/multitask_<model>/
+#   clean_corpus               PubMed papers decontaminated, cleaned, split -> data/interim/pubmed/
+#   tokenize_corpus@<model>    tokenized and packed blocks -> data/processed/pubmed_<model>/
+#
+# The fine-tuning data is JSONL (one file per split, each example once); the
+# training mixture is built from it when fine-tuning starts (the `mixture`
+# config section). A new base model only reruns the @<model> stages.
+#
+#   uv run dvc repro pipelines/data/dvc.yaml:filter_length@qwen3-1.7b
+#   uv run dvc status pipelines/data/dvc.yaml        # what would run, and why
+#
+# Name the stage: `dvc repro` of the whole file also checks the frozen corpus
+# stages, whose outputs do not exist yet, and fails. The PubMed papers
+# themselves are downloaded by pubmed-extractor, outside this repository
+# (`corpus.raw_dir`). The corpus stages are frozen until the pretraining
+# branch is turned on:
+#   uv run dvc unfreeze pipelines/data/dvc.yaml:clean_corpus \
+#     pipelines/data/dvc.yaml:tokenize_corpus@qwen3-1.7b
+# Every stage runs from the repository root (wdir).
+
+vars:
+  - models:
+      - qwen3-1.7b
+
+stages:
+  download:
+    wdir: ../..
+    cmd: uv run python -m src.download
+    deps:
+      - src/download.py
+    params:
+      - configs/config.yaml:
+          - datasets
+    outs:
+      - data/raw:
+          cache: false
+
+  build_examples:
+    wdir: ../..
+    cmd: uv run python -m src.multitask build_examples
+    deps:
+      - src/multitask.py
+      - src/dataset_preparation.py
+      - src/formatting.py
+      - data/raw
+      - data/benchmarks/pubmedqa_test_ground_truth.json
+    outs:
+      - data/interim/multitask/examples:
+          cache: false
+
+  split:
+    wdir: ../..
+    cmd: uv run python -m src.multitask split
+    deps:
+      - src/multitask.py
+      - src/dataset_preparation.py
+      - data/interim/multitask/examples
+    params:
+      - configs/config.yaml:
+          - seed
+          - multitask.medtext_holdout_fraction
+          - multitask.pubmedqa_validation_size
+          - multitask.medmcqa_validation_size
+          - multitask.medqa_validation_size
+    outs:
+      - data/interim/multitask/splits:
+          cache: false
+
+  filter_length:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m src.multitask filter_length model=${item}
+      deps:
+        - src/multitask.py
+        - data/interim/multitask/splits
+      params:
+        - configs/model/${item}.yaml:
+            - model.model_id
+            - model.max_seq_len
+      outs:
+        - data/processed/multitask_${item}:
+            cache: false
+
+  clean_corpus:
+    frozen: true
+    wdir: ../..
+    cmd: uv run python -m src.corpus clean
+    deps:
+      - src/corpus.py
+    params:
+      - configs/config.yaml:
+          - seed
+          - corpus.raw_dir
+          - corpus.validation_fraction
+          - corpus.remove_boilerplate_sections
+          - corpus.remove_citations
+          - corpus.benchmark_dataset_id
+          - corpus.benchmark_subset
+    outs:
+      - data/interim/pubmed:
+          cache: false
+
+  tokenize_corpus:
+    foreach: ${models}
+    do:
+      frozen: true
+      wdir: ../..
+      cmd: uv run python -m src.corpus tokenize model=${item}
+      deps:
+        - src/corpus.py
+        - data/interim/pubmed
+      params:
+        - configs/model/${item}.yaml:
+            - model.model_id
+            - model.max_seq_len
+      outs:
+        - data/processed/pubmed_${item}:
+            cache: false

@@ -33,6 +33,10 @@ Thumbs.db
 # Hugging Face datasets caches
 data/processed/**/cache-*.arrow
 
+# Raw downloads and intermediate data (rebuilt by pipelines/data/dvc.yaml)
+data/raw/
+data/interim/
+
 # Tokenized pretraining corpus (several GB, rebuilt by src/corpus.py)
 data/processed/pubmed_*/
 

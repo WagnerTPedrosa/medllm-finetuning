@@ -1,13 +1,13 @@
 """LLM-as-judge evaluation (G-Eval) of the answers generated for the MedText test set.
 
-Every seed of both fine-tuning runs of a base model (`results/<model>/finetune_*.json`)
+Every seed of the given fine-tuning runs (`results/<model>/finetune_<run>.json`)
 answers the MedText test questions. Then a local judge model, served by vLLM,
 scores each answer against the reference on three criteria (correctness,
 completeness, coherence). The answers are generated first, so the judge gets
 the GPU to itself. Scores are logged to the seed runs and their mean and
 standard deviation to the parent runs, next to the other test metrics.
 
-    uv run python -m src.geval model=qwen3-1.7b
+    uv run python -m src.geval --runs lora_original
 
 The stage starts the vLLM server and stops it at the end, unless a server is
 already listening at `geval.base_url` (see the `geval` section of the config).
@@ -24,6 +24,7 @@ import asyncio
 import gc
 import json
 import signal
+import statistics
 import subprocess
 import time
 from pathlib import Path
@@ -48,7 +49,7 @@ from src.inference import generate_completion
 from src.modeling import load_model
 from src.multitask import load_multitask
 from src.multitask_train import summarize_seeds
-from src.report import BASES, load_stage_result, save_stage_result
+from src.report import load_stage_result, save_stage_result
 from src.tracking import configure_tracking
 
 METRIC_PREFIX = "test_medtext_geval"
@@ -330,18 +331,34 @@ def log_seed_scores(
     return summary
 
 
-def run_geval(config: MultitaskConfig) -> dict[str, Any]:
-    """Score every seed of both fine-tuning runs and log the mean and std per run.
+def mean_scores_per_example(
+    seed_rows: list[list[dict[str, float | str]]], metric_names: list[str]
+) -> dict[str, list[float]]:
+    """Score of every answer averaged over seeds, per criterion (for the report's confidence intervals)."""
+    return {
+        name: [statistics.mean(float(rows[i][name]) for rows in seed_rows) for i in range(len(seed_rows[0]))]
+        for name in metric_names
+    }
+
+
+def run_geval(config: MultitaskConfig, runs: list[str]) -> dict[str, Any]:
+    """Score every seed of the given fine-tuning runs and log the mean and std per run.
+
+    Args:
+        config: Multitask configuration.
+        runs: Fine-tuning results to score, by the suffix of their file
+            (`lora_original` for `results/<model>/finetune_lora_original.json`).
 
     Returns:
-        The judge model and `{base: {metric: {"mean": ..., "std": ...}}}`.
+        The judge model, `{run: {metric: {"mean": ..., "std": ...}}}` under
+        `bases`, and the score of every answer per run and criterion under `scores`.
     """
     configure_tracking(config)
     test_set: Dataset = load_multitask(config.multitask.processed_dir)["test_medtext"]
     if config.geval.num_examples is not None:
         test_set = test_set.select(range(min(config.geval.num_examples, len(test_set))))
     finetunes: dict[str, dict[str, Any]] = {
-        base: load_stage_result(config.results_dir, f"finetune_{base}") for base in BASES
+        run: load_stage_result(config.results_dir, f"finetune_{run}") for run in runs
     }
 
     answers_by_run: dict[str, list[str]] = {}
@@ -354,14 +371,17 @@ def run_geval(config: MultitaskConfig) -> dict[str, Any]:
     judge = build_judge(config.geval)
     client = mlflow.MlflowClient()
     summaries: dict[str, dict[str, dict[str, float]]] = {}
+    scores: dict[str, dict[str, list[float]]] = {}
     with JudgeServer(config.geval):
-        for base, finetune in finetunes.items():
+        for run, finetune in finetunes.items():
             seed_summaries: list[dict[str, float]] = []
+            seed_rows: list[list[dict[str, float | str]]] = []
             for seed in finetune["seeds"]:
                 answers: list[str] = answers_by_run[seed["run_id"]]
-                print(f"Scoring {len(answers)} answers of {base} seed {seed['seed']} with {config.geval.judge_model}")
+                print(f"Scoring {len(answers)} answers of {run} seed {seed['seed']} with {config.geval.judge_model}")
                 test_cases = build_test_cases(test_set["prompt"], answers, test_set["completion"])
                 rows = asyncio.run(score_test_cases(test_cases, judge, config.geval.max_concurrent))
+                seed_rows.append(rows)
                 seed_summaries.append(
                     log_seed_scores(seed["run_id"], test_set, answers, rows, config.geval.judge_model)
                 )
@@ -373,18 +393,25 @@ def run_geval(config: MultitaskConfig) -> dict[str, Any]:
                 metrics.append(Metric(f"{key}_std", value["std"], 0, 0))
             client.log_batch(finetune["parent_run_id"], metrics=metrics)
             client.set_tag(finetune["parent_run_id"], "geval_judge", config.geval.judge_model)
-            summaries[base] = summary
+            summaries[run] = summary
+            scores[run] = mean_scores_per_example(seed_rows, list(GEVAL_METRICS))
 
-    return {"judge_model": config.geval.judge_model, "bases": summaries}
+    return {"judge_model": config.geval.judge_model, "bases": summaries, "scores": scores}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="G-Eval of the multitask models on the MedText test set.")
     parser.add_argument("overrides", nargs="*", help="Hydra overrides, for example model=qwen3-1.7b")
+    parser.add_argument(
+        "--runs",
+        nargs="+",
+        required=True,
+        help="Fine-tuning results to score, e.g. lora_original for results/<model>/finetune_lora_original.json",
+    )
     args = parser.parse_args()
 
     config: MultitaskConfig = load_multitask_config(args.overrides)
-    outcome: dict[str, Any] = run_geval(config)
+    outcome: dict[str, Any] = run_geval(config, args.runs)
     save_stage_result(config.results_dir, "geval", outcome)
     print(json.dumps(outcome, indent=2))
 

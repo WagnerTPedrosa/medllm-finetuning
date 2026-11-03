@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,8 @@ from datasets import Dataset, DatasetDict
 
 from src.config import PretrainConfig, load_pretrain_config
 from src.corpus import (
+    clean_corpus_documents,
+    pack_corpus,
     is_boilerplate_heading,
     pack_blocks,
     remove_boilerplate_sections,
@@ -27,10 +30,10 @@ class FakeTokenizer:
 def test_load_pretrain_config_reads_corpus_section() -> None:
     config: PretrainConfig = load_pretrain_config()
 
-    assert config.model.model_id == "openai-community/gpt2"
+    assert config.model.model_id == "Qwen/Qwen3-1.7B-Base"
     assert config.corpus.validation_fraction == 0.01
     assert config.corpus.remove_boilerplate_sections is True
-    assert config.mlflow.registered_model_name == "gpt2-pubmed-dapt"
+    assert config.mlflow.registered_model_name == "qwen3-1.7b-pubmed-dapt"
 
 
 @pytest.mark.parametrize(
@@ -131,3 +134,34 @@ def test_pack_blocks_concatenates_and_drops_the_remainder() -> None:
     batch = {"input_ids": [[1, 2, 3], [4, 5]]}
 
     assert pack_blocks(batch, block_size=2) == {"input_ids": [[1, 2], [3, 4]]}
+
+
+def test_clean_corpus_documents_removes_benchmark_articles_cleans_and_splits() -> None:
+    documents = Dataset.from_dict(
+        {
+            "pmid": [str(i) for i in range(20)],
+            "pmcid": [f"PMC{i}" for i in range(20)],
+            "stratum": ["a"] * 10 + ["b"] * 10,
+            "text": ["Result [1] holds."] * 20,
+        }
+    )
+    corpus = replace(load_pretrain_config().corpus, validation_fraction=0.2, num_proc=1)
+
+    splits, stats = clean_corpus_documents(documents, benchmark_pmids={"0", "1"}, corpus=corpus, seed=0)
+
+    assert stats["documents"]["removed_benchmark"] == 2
+    assert len(splits["train"]) + len(splits["validation"]) == 18
+    assert set(splits["train"]["pmcid"]).isdisjoint(splits["validation"]["pmcid"])
+    assert splits["train"]["text"][0] == "Result holds."
+
+
+def test_pack_corpus_tokenizes_and_packs_each_split() -> None:
+    splits = DatasetDict(
+        {"train": Dataset.from_dict({"text": ["aa b", "ccc"]}), "validation": Dataset.from_dict({"text": ["d"]})}
+    )
+
+    packed, stats = pack_corpus(splits, FakeTokenizer(), block_size=2, num_proc=1)  # type: ignore[arg-type]
+
+    assert packed["train"]["input_ids"] == [[2, 1], [0, 3]]
+    assert stats["tokens"] == {"train": 5, "validation": 2}
+    assert stats["blocks"] == {"train": 2, "validation": 1}

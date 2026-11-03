@@ -22,10 +22,16 @@ lr_sweep:
   learning_rates: [1.0e-5, 3.0e-5, 1.0e-4]
 
 finetune:
-  # Placeholder until the multitask sweep is run
-  learning_rate: 2.0e-5
+  method: lora
+  # Usual LoRA starting rate (adapters need higher rates than full fine-tuning);
+  # placeholder until the multitask sweep is run
+  learning_rate: 2.0e-4
   batch_size: 16
-  gradient_checkpointing: false
+  # A batch of 16 long examples (1536 tokens) needs ~58 GB with it and does not
+  # fit in 96 GB without it; it costs ~30% speed
+  gradient_checkpointing: true
+  # One seed while the setup is explored
+  seeds: [42]
 
 sweep:
   search_space:
