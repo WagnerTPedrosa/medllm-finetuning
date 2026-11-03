@@ -30,7 +30,7 @@
 #     pipelines/data/dvc.yaml:tokenize_corpus@qwen3-1.7b \
 #     pipelines/training/dvc.yaml:pretrain@qwen3-1.7b \
 #     pipelines/training/dvc.yaml:finetune_lora_dapt@qwen3-1.7b
-# The sweeps (`src.pretrain --sweep`, `src.multitask_train --sweep`) are not
+# The sweeps (`medllm.training.pretrain --sweep`, `medllm.training.sweep`) are not
 # stages: their chosen values go into the model file, so the runs here are
 # reproducible from git.
 
@@ -44,11 +44,11 @@ stages:
     do:
       frozen: true
       wdir: ../..
-      cmd: uv run python -m src.pretrain model=${item}
+      cmd: uv run python -m medllm.training.pretrain model=${item}
       deps:
-        - src/pretrain.py
-        - src/modeling.py
-        - src/tracking.py
+        - src/medllm/training/pretrain.py
+        - src/medllm/modeling.py
+        - src/medllm/tracking.py
         - data/processed/pubmed_${item}
       params:
         - configs/config.yaml:
@@ -65,12 +65,13 @@ stages:
     foreach: ${models}
     do:
       wdir: ../..
-      cmd: uv run python -m src.multitask_train --baseline model=${item}
+      cmd: uv run python -m medllm.evaluation.zero_shot model=${item}
       deps:
-        - src/multitask_train.py
-        - src/choice_eval.py
-        - src/evaluation.py
-        - src/modeling.py
+        - src/medllm/evaluation/zero_shot.py
+        - src/medllm/evaluation/tasks.py
+        - src/medllm/evaluation/choices.py
+        - src/medllm/evaluation/loss.py
+        - src/medllm/modeling.py
         - data/processed/multitask_${item}
       params:
         - configs/config.yaml:
@@ -85,14 +86,15 @@ stages:
     foreach: ${models}
     do:
       wdir: ../..
-      cmd: uv run python -m src.multitask_train --base original model=${item} finetune.method=lora
+      cmd: uv run python -m medllm.training.finetune --base original model=${item} finetune.method=lora
       deps:
-        - src/multitask_train.py
-        - src/choice_eval.py
-        - src/evaluation.py
-        - src/train.py
-        - src/modeling.py
-        - src/tracking.py
+        - src/medllm/training/finetune.py
+        - src/medllm/data/mixture.py
+        - src/medllm/evaluation/tasks.py
+        - src/medllm/evaluation/choices.py
+        - src/medllm/evaluation/loss.py
+        - src/medllm/modeling.py
+        - src/medllm/tracking.py
         - data/processed/multitask_${item}
       params:
         - configs/config.yaml:
@@ -112,14 +114,15 @@ stages:
     do:
       frozen: true
       wdir: ../..
-      cmd: uv run python -m src.multitask_train --base dapt model=${item} finetune.method=lora
+      cmd: uv run python -m medllm.training.finetune --base dapt model=${item} finetune.method=lora
       deps:
-        - src/multitask_train.py
-        - src/choice_eval.py
-        - src/evaluation.py
-        - src/train.py
-        - src/modeling.py
-        - src/tracking.py
+        - src/medllm/training/finetune.py
+        - src/medllm/data/mixture.py
+        - src/medllm/evaluation/tasks.py
+        - src/medllm/evaluation/choices.py
+        - src/medllm/evaluation/loss.py
+        - src/medllm/modeling.py
+        - src/medllm/tracking.py
         - data/processed/multitask_${item}
         # The pretrained model it starts from
         - results/${item}/pretrain.json
@@ -141,10 +144,10 @@ stages:
     foreach: ${models}
     do:
       wdir: ../..
-      cmd: uv run python -m src.geval --runs lora_original model=${item}
+      cmd: uv run python -m medllm.evaluation.geval --runs lora_original model=${item}
       deps:
-        - src/geval.py
-        - src/inference.py
+        - src/medllm/evaluation/geval.py
+        - src/medllm/evaluation/generation.py
         - data/processed/multitask_${item}
         - results/${item}/finetune_lora_original.json
       params:
@@ -160,10 +163,10 @@ stages:
     # One base model for now; list every model under --models when there are more
     wdir: ../..
     cmd: >-
-      uv run python -m src.report --models qwen3-1.7b
+      uv run python -m medllm.reporting.report --models qwen3-1.7b
       --data-stats data/processed/multitask_qwen3-1.7b/stats.json
     deps:
-      - src/report.py
+      - src/medllm/reporting/report.py
       - data/processed/multitask_qwen3-1.7b/stats.json
       - results/qwen3-1.7b/baseline.json
       - results/qwen3-1.7b/finetune_lora_original.json

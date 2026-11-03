@@ -1,37 +1,58 @@
 # medllm-finetuning
 
-Training saves the best fine-tuned model to `checkpoints/gpt2-medtext-best/`.
-Checkpoints are generated locally and are not stored in this Git repository.
+Fine-tuning a base LLM (Qwen3-1.7B-Base) for medical question answering on
+MedText, PubMedQA, MedMCQA and MedQA, with LoRA, optional continued
+pretraining on PubMed papers, and a report with confidence intervals. The
+first experiment (GPT-2) is archived at git tag `v1-gpt2`.
 
-## MLflow experiment tracking
+## Layout
 
-Install the project dependencies with `uv sync`. The notebook's existing
-`run_grid_search(...)` and `run_optuna_search(...)` calls then create one MLflow
-run per trial. Each run stores the effective training parameters, the complete
-YAML configuration, training and validation losses by epoch. The prompt-completion
-training and validation splits appear under Datasets, and the fine-tuned model
-and tokenizer appear under Logged Models. Optuna trials
-stopped by pruning retain their current weights and have a `status=pruned` tag;
-completed trials save the best validation checkpoint. The results JSON files
-include each trial's `mlflow_run_id` and `mlflow_model_id` (when available).
+```
+configs/                 Hydra configuration
+  config.yaml            the whole pipeline
+  model/<model>.yaml     values per base model (learning rates, batch sizes, ...)
+pipelines/               DVC pipelines
+  data/dvc.yaml          download -> preprocess -> split -> filter_length@model
+  training/dvc.yaml      evaluate_zero_shot -> finetune_lora_original -> judge_geval -> report
+src/medllm/
+  config.py              typed configuration (frozen dataclasses)
+  modeling.py            loading models, LoRA, GPU memory
+  tracking.py            MLflow runs and Model Registry
+  data/                  download, preprocessing, splits, mixture, multitask (CLI), corpus
+  training/              finetune, sweep, pretrain
+  evaluation/            loss, choices, tasks, zero_shot, generation, geval
+  reporting/             report, plots
+tests/                   mirrors src/medllm/
+notebooks/               exploration
+data/                    raw/ and interim/ (rebuilt), processed/ (per model), benchmarks/
+results/<model>/         one JSON summary per training stage
+reports/comparison.md    the final comparison table
+```
 
-Tracking uses the SQLite URI and experiment name in
-`configs/gpt2_medtext.yaml` (currently `mlflow.db` and
-`gpt2-medtext-fine-tuned`). Start the UI from the project root:
+## Running
+
+```bash
+uv sync
+uv run dvc repro pipelines/data/dvc.yaml:filter_length@qwen3-1.7b
+uv run dvc repro pipelines/training/dvc.yaml:report
+```
+
+Name the last stage you need: `dvc repro` of a whole file also checks the
+frozen PubMed pretraining stages and fails. `uv run dvc status
+pipelines/training/dvc.yaml` shows what would run and why. Each stage can also
+be run on its own, for example
+`uv run python -m medllm.training.finetune --base original model=qwen3-1.7b`.
+
+## Tracking
+
+Runs, metrics and models are tracked in MLflow (`mlflow.db`):
 
 ```bash
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
 
-Open the URL printed by MLflow (usually `http://127.0.0.1:5000`). To use a
-remote tracking server, set `MLFLOW_TRACKING_URI` before running the notebook;
-set `MLFLOW_EXPERIMENT_NAME` to change the experiment name. Model artifacts can
-take substantial disk space because every trial gets its own copy. A saved
-trial model can be loaded with
-`mlflow.transformers.load_model(f"models:/{model_id}")`.
-If the named experiment was deleted in MLflow, new runs go into a name ending
-in `-rerun` (or the next available suffix) without restoring the deleted one.
+## Tests
 
-Runs created before dataset and model entities were added can be upgraded with
-`uv run python -m src.repair_mlflow_runs`. The command is safe to repeat and
-processes only completed runs in the configured experiment.
+```bash
+uv run pytest
+```

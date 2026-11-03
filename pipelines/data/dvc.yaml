@@ -3,7 +3,7 @@
 #   raw (downloaded) -> interim (model-independent) -> processed (per base model)
 #
 #   download                   the fine-tuning datasets at pinned revisions -> data/raw/
-#   build_examples             prompt/completion examples, official tests apart -> data/interim/multitask/examples/
+#   preprocess                 prompt/completion examples, official tests apart -> data/interim/multitask/preprocessed/
 #   split                      validation sets held out -> data/interim/multitask/splits/
 #   filter_length@<model>      examples that fit the model's context -> data/processed/multitask_<model>/
 #   clean_corpus               PubMed papers decontaminated, cleaned, split -> data/interim/pubmed/
@@ -32,9 +32,9 @@ vars:
 stages:
   download:
     wdir: ../..
-    cmd: uv run python -m src.download
+    cmd: uv run python -m medllm.data.download
     deps:
-      - src/download.py
+      - src/medllm/data/download.py
     params:
       - configs/config.yaml:
           - datasets
@@ -42,26 +42,26 @@ stages:
       - data/raw:
           cache: false
 
-  build_examples:
+  preprocess:
     wdir: ../..
-    cmd: uv run python -m src.multitask build_examples
+    cmd: uv run python -m medllm.data.multitask preprocess
     deps:
-      - src/multitask.py
-      - src/dataset_preparation.py
-      - src/formatting.py
+      - src/medllm/data/multitask.py
+      - src/medllm/data/preprocessing.py
+      - src/medllm/data/download.py
       - data/raw
       - data/benchmarks/pubmedqa_test_ground_truth.json
     outs:
-      - data/interim/multitask/examples:
+      - data/interim/multitask/preprocessed:
           cache: false
 
   split:
     wdir: ../..
-    cmd: uv run python -m src.multitask split
+    cmd: uv run python -m medllm.data.multitask split
     deps:
-      - src/multitask.py
-      - src/dataset_preparation.py
-      - data/interim/multitask/examples
+      - src/medllm/data/multitask.py
+      - src/medllm/data/splits.py
+      - data/interim/multitask/preprocessed
     params:
       - configs/config.yaml:
           - seed
@@ -77,9 +77,10 @@ stages:
     foreach: ${models}
     do:
       wdir: ../..
-      cmd: uv run python -m src.multitask filter_length model=${item}
+      cmd: uv run python -m medllm.data.multitask filter_length model=${item}
       deps:
-        - src/multitask.py
+        - src/medllm/data/multitask.py
+        - src/medllm/data/splits.py
         - data/interim/multitask/splits
       params:
         - configs/model/${item}.yaml:
@@ -92,9 +93,9 @@ stages:
   clean_corpus:
     frozen: true
     wdir: ../..
-    cmd: uv run python -m src.corpus clean
+    cmd: uv run python -m medllm.data.corpus clean
     deps:
-      - src/corpus.py
+      - src/medllm/data/corpus.py
     params:
       - configs/config.yaml:
           - seed
@@ -113,9 +114,9 @@ stages:
     do:
       frozen: true
       wdir: ../..
-      cmd: uv run python -m src.corpus tokenize model=${item}
+      cmd: uv run python -m medllm.data.corpus tokenize model=${item}
       deps:
-        - src/corpus.py
+        - src/medllm/data/corpus.py
         - data/interim/pubmed
       params:
         - configs/model/${item}.yaml:

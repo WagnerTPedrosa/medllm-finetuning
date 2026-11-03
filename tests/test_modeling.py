@@ -1,9 +1,18 @@
 from pathlib import Path
 
+import mlflow
 import torch
+from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import GPT2Config, GPT2LMHeadModel
 
-from src.modeling import load_causal_lm
+from medllm.config import MultitaskConfig, load_multitask_config
+from medllm.modeling import (
+    build_peft_config,
+    load_causal_lm,
+    merge_lora,
+    resolve_model_source,
+)
+from medllm.tracking import configure_tracking
 
 
 def test_load_causal_lm_loads_weights_in_float32(tmp_path: Path) -> None:
@@ -14,3 +23,57 @@ def test_load_causal_lm_loads_weights_in_float32(tmp_path: Path) -> None:
     model = load_causal_lm(str(tmp_path))
 
     assert next(model.parameters()).dtype == torch.float32
+
+
+def test_resolve_model_source_keeps_hub_ids_and_local_paths() -> None:
+    assert resolve_model_source("openai-community/gpt2") == "openai-community/gpt2"
+    assert resolve_model_source("checkpoints/gpt2-medtext-best") == "checkpoints/gpt2-medtext-best"
+
+
+def test_resolve_model_source_downloads_logged_model_weights(
+    config: MultitaskConfig, tracking_store: Path
+) -> None:
+    configure_tracking(config)
+    packaged = tracking_store / "packaged"
+    (packaged / "model").mkdir(parents=True)
+    (packaged / "model" / "config.json").write_text('{"model_type": "gpt2"}')
+    with mlflow.start_run() as run:
+        mlflow.log_artifacts(str(packaged), "packaged")
+
+    local_dir = Path(resolve_model_source(f"runs:/{run.info.run_id}/packaged"))
+
+    assert local_dir.name == "model"
+    assert (local_dir / "config.json").exists()
+
+
+def load() -> MultitaskConfig:
+    return load_multitask_config()
+
+
+def test_build_peft_config_follows_the_lora_settings() -> None:
+    config = load()
+
+    peft_config = build_peft_config(config)
+
+    assert isinstance(peft_config, LoraConfig)
+    assert peft_config.r == config.finetune.lora.r
+    assert peft_config.lora_alpha == config.finetune.lora.alpha
+    assert set(peft_config.target_modules) == set(config.finetune.lora.target_modules)
+
+
+def test_build_peft_config_is_none_for_full_fine_tuning() -> None:
+    assert build_peft_config(load_multitask_config(["finetune.method=full"])) is None
+
+
+def test_merged_lora_model_matches_the_adapter_model(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    base = GPT2LMHeadModel(GPT2Config(n_layer=1, n_head=2, n_embd=16)).eval()
+    lora = LoraConfig(r=4, lora_alpha=8, target_modules=["c_attn"], init_lora_weights=False)
+    adapted = get_peft_model(base, lora)
+    inputs = torch.tensor([[1, 2, 3]])
+    expected = adapted(inputs).logits
+
+    merged = merge_lora(adapted)
+
+    assert not isinstance(merged, PeftModel)
+    assert torch.allclose(merged(inputs).logits, expected, atol=1e-5)

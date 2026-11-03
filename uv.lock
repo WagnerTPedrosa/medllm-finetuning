@@ -1718,9 +1718,9 @@ wheels = [
 ]
 
 [[package]]
-name = "medllm-finetuining"
+name = "medllm"
 version = "0.0.1"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "datasets" },

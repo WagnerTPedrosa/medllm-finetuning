@@ -106,7 +106,7 @@ datasets:
 
 # Fine-tuning data: raw -> examples -> splits (model-independent) -> processed (per model)
 multitask:
-  examples_dir: data/interim/multitask/examples
+  preprocessed_dir: data/interim/multitask/preprocessed
   splits_dir: data/interim/multitask/splits
   processed_dir: data/processed/multitask_${model.name}
   # PMIDs of the official PubMedQA test set (500 PQA-L questions)
