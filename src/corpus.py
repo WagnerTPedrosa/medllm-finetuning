@@ -9,6 +9,7 @@ Steps (the raw JSONL shards are never modified):
 The result is saved with `stats.json` (what each step removed or produced).
 """
 
+import argparse
 import json
 import random
 import re
@@ -20,7 +21,7 @@ from typing import Any
 from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from src.config import PretrainConfig
+from src.config import PretrainConfig, load_pretrain_config
 
 HEADING_PREFIX = "## "
 # Leading section numbers such as "5.", "2.1" or "IV."
@@ -346,3 +347,17 @@ def prepare_corpus(config: PretrainConfig) -> DatasetDict | None:
 def load_pretrain_corpus(processed_dir: str | Path) -> DatasetDict:
     """Load the packed `train` and `validation` blocks written by `prepare_corpus`."""
     return load_from_disk(str(processed_dir))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Clean, tokenize and pack the PubMed corpus for one base model."
+    )
+    parser.add_argument("overrides", nargs="*", help="Hydra overrides, for example model=qwen3-1.7b")
+    args = parser.parse_args()
+
+    prepare_corpus(load_pretrain_config(args.overrides))
+
+
+if __name__ == "__main__":
+    main()

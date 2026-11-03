@@ -1,9 +1,12 @@
 """Continued (domain-adaptive) pretraining of a causal LM on the packed PubMed corpus.
 
-Run from the repository root:
+Run from the repository root (Hydra overrides pick the base model; GPT-2 by default):
 
-    uv run python -m src.pretrain --config configs/gpt2_pubmed_pretrain.yaml
-    uv run python -m src.pretrain --config configs/gpt2_pubmed_pretrain.yaml --max-steps 20
+    uv run python -m src.pretrain model=qwen3-1.7b
+    uv run python -m src.pretrain model=qwen3-1.7b --max-steps 20
+    uv run python -m src.pretrain model=qwen3-1.7b --sweep
+
+A full run writes `results/<model>/pretrain.json` (the DVC stage output).
 
 A full run resumes from the last checkpoint in `pretraining.output_dir` (and
 continues the same MLflow run) if it was interrupted. Runs limited with
@@ -25,7 +28,6 @@ import mlflow
 import torch
 from datasets import Dataset, DatasetDict
 from transformers import (
-    AutoModelForCausalLM,
     AutoTokenizer,
     Trainer,
     TrainerCallback,
@@ -37,7 +39,8 @@ from transformers.trainer_utils import get_last_checkpoint
 
 from src.config import PretrainConfig, load_pretrain_config
 from src.corpus import load_pretrain_corpus
-from src.modeling import resolve_model_source
+from src.modeling import load_causal_lm, resolve_model_source
+from src.report import save_stage_result
 from src.tracking import configure_tracking, log_best_model, start_stage_run
 
 RUN_ID_FILE = "mlflow_run_id.txt"
@@ -123,6 +126,7 @@ def build_training_arguments(
         logging_strategy="steps",
         logging_steps=training.logging_steps,
         bf16=training.bf16,
+        gradient_checkpointing=training.gradient_checkpointing,
         torch_compile=training.torch_compile,
         optim=training.optim,
         dataloader_num_workers=training.dataloader_num_workers,
@@ -186,7 +190,7 @@ def run_pretraining(
     )
     model_source: str = resolve_model_source(config.model.model_id)
     tokenizer = AutoTokenizer.from_pretrained(model_source)
-    model = AutoModelForCausalLM.from_pretrained(model_source)
+    model = load_causal_lm(model_source)
 
     configure_tracking(config)
     if checkpoint is not None and run_id_path.exists():
@@ -274,7 +278,7 @@ def evaluate_on_corpus(model_id: str, config: PretrainConfig) -> dict[str, float
     Returns:
         `loss` and `perplexity`.
     """
-    model = AutoModelForCausalLM.from_pretrained(resolve_model_source(model_id))
+    model = load_causal_lm(model_id)
     validation_blocks: Dataset = load_pretrain_corpus(config.corpus.processed_dir)[
         "validation"
     ]
@@ -359,7 +363,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Continued pretraining on the PubMed corpus."
     )
-    parser.add_argument("--config", default="configs/gpt2_pubmed_pretrain.yaml")
+    parser.add_argument(
+        "overrides", nargs="*", help="Hydra overrides, for example model=qwen3-1.7b"
+    )
     parser.add_argument(
         "--max-steps", type=int, help="Smoke test: stop after N optimizer steps"
     )
@@ -372,16 +378,11 @@ def main() -> None:
         "--no-register", action="store_true", help="Do not register the final model"
     )
     parser.add_argument(
-        "--learning-rate", type=float, help="Override pretraining.learning_rate"
-    )
-    parser.add_argument(
         "--sweep", action="store_true", help="Run the learning-rate sweep from lr_sweep"
     )
     args = parser.parse_args()
 
-    config = load_pretrain_config(args.config)
-    if args.learning_rate is not None:
-        config = with_learning_rate(config, args.learning_rate)
+    config: PretrainConfig = load_pretrain_config(args.overrides)
 
     if args.sweep:
         for result in sweep_learning_rates(config):
@@ -395,6 +396,9 @@ def main() -> None:
         register=not args.no_register,
     )
     print(result)
+    if result["model_id"] is not None:
+        model_uri = f"models:/{config.mlflow.registered_model_name}@{config.pretraining.registry_alias}"
+        save_stage_result(config.results_dir, "pretrain", {**result, "model_uri": model_uri})
 
 
 if __name__ == "__main__":

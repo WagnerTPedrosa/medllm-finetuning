@@ -13,6 +13,7 @@ Splits:
                    has no labels)
 """
 
+import argparse
 import json
 import random
 from collections import deque
@@ -31,7 +32,7 @@ from datasets import (
 )
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
-from src.config import MultitaskConfig, MultitaskDataConfig
+from src.config import MultitaskConfig, MultitaskDataConfig, load_multitask_config
 from src.dataset_preparation import load_medtext
 from src.formatting import format_prompt
 
@@ -336,7 +337,8 @@ def prepare_multitask(config: MultitaskConfig) -> DatasetDict | None:
         print(f"{output_dir} already exists")
         return None
 
-    tokenizer = AutoTokenizer.from_pretrained(config.model.model_id)
+    # The same tokenizer for every base model, so all of them see the same examples
+    tokenizer = AutoTokenizer.from_pretrained(config.data_filter.tokenizer)
     tokenizer.model_max_length = 10**9
 
     # MedText
@@ -384,7 +386,7 @@ def prepare_multitask(config: MultitaskConfig) -> DatasetDict | None:
         "test": to_examples(medmcqa_raw["validation"], medmcqa_example, data.num_proc),
     }
 
-    max_len: int = config.model.max_seq_len
+    max_len: int = config.data_filter.max_seq_len
     dropped: dict[str, int] = {}
     named_sets: dict[str, Dataset] = {
         "medtext_train": medtext["train"],
@@ -409,7 +411,7 @@ def prepare_multitask(config: MultitaskConfig) -> DatasetDict | None:
         pubmedqa_artificial=named_sets["pubmedqa_artificial"],
         medmcqa=named_sets["medmcqa_train"],
         data_config=data,
-        num_epochs=config.training.max_epochs,
+        num_epochs=data.mixture_epochs,
         seed=config.seed,
     )
     dev_medmcqa: Dataset = named_sets["dev_medmcqa_full"].select(range(data.dev_medmcqa_size))
@@ -429,10 +431,10 @@ def prepare_multitask(config: MultitaskConfig) -> DatasetDict | None:
         }
     )
 
-    epoch_size: int = len(mixture) // config.training.max_epochs
+    epoch_size: int = len(mixture) // data.mixture_epochs
     stats: dict[str, Any] = {
         "seed": config.seed,
-        "epochs_in_mixture": config.training.max_epochs,
+        "epochs_in_mixture": data.mixture_epochs,
         "examples_per_epoch": epoch_size,
         "rows": {name: len(split) for name, split in splits.items()},
         "train_tasks": {
@@ -456,3 +458,15 @@ def prepare_multitask(config: MultitaskConfig) -> DatasetDict | None:
 def load_multitask(processed_dir: str | Path) -> DatasetDict:
     """Load the splits written by `prepare_multitask`."""
     return load_from_disk(str(processed_dir))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Build the multitask fine-tuning data.")
+    parser.add_argument("overrides", nargs="*", help="Hydra overrides")
+    args = parser.parse_args()
+
+    prepare_multitask(load_multitask_config(args.overrides))
+
+
+if __name__ == "__main__":
+    main()

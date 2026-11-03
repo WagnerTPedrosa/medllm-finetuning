@@ -13,7 +13,6 @@ from src.corpus import (
     tokenize_documents,
 )
 
-PRETRAIN_CONFIG_PATH = Path("configs/gpt2_pubmed_pretrain.yaml").resolve()
 
 
 class FakeTokenizer:
@@ -26,7 +25,7 @@ class FakeTokenizer:
 
 
 def test_load_pretrain_config_reads_corpus_section() -> None:
-    config: PretrainConfig = load_pretrain_config(PRETRAIN_CONFIG_PATH)
+    config: PretrainConfig = load_pretrain_config()
 
     assert config.model.model_id == "openai-community/gpt2"
     assert config.corpus.validation_fraction == 0.01

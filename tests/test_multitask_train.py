@@ -7,6 +7,7 @@ from transformers import TrainerControl, TrainerState, TrainingArguments
 from src.config import FloatRange, MultitaskConfig, load_multitask_config
 from src.multitask_train import (
     StopAfterStepsCallback,
+    base_model_id,
     build_multitask_sft_config,
     epoch_metrics,
     steps_per_epoch,
@@ -16,11 +17,10 @@ from src.multitask_train import (
 )
 from src.train import OptunaPruningCallback
 
-MULTITASK_CONFIG_PATH = Path("configs/gpt2_multitask.yaml").resolve()
 
 
 def load() -> MultitaskConfig:
-    return load_multitask_config(MULTITASK_CONFIG_PATH)
+    return load_multitask_config()
 
 
 def test_steps_per_epoch_rounds_up() -> None:
@@ -179,3 +179,23 @@ def test_stop_after_steps_callback_ends_training_at_the_budget() -> None:
     state.global_step = 100
     callback.on_step_end(args, state, control)
     assert control.should_training_stop is True
+
+
+def test_base_model_id_starts_dapt_from_the_pretrained_model() -> None:
+    config = load()
+
+    assert base_model_id(config, "original") == config.model.model_id
+    assert base_model_id(config, "dapt") == "models:/gpt2-pubmed-dapt@candidate"
+
+
+def test_base_model_id_rejects_an_unknown_base() -> None:
+    with pytest.raises(ValueError):
+        base_model_id(load(), "instruct")
+
+
+def test_build_multitask_sft_config_follows_gradient_checkpointing(tmp_path: Path) -> None:
+    config = load()
+
+    sft_config = build_multitask_sft_config(config, tmp_path, seed=1, epoch_steps=10)
+
+    assert sft_config.gradient_checkpointing == config.finetune.gradient_checkpointing

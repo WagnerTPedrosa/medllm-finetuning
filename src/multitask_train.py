@@ -1,10 +1,13 @@
 """Multitask fine-tuning (MedText + PubMedQA + MedMCQA) and its evaluation.
 
-Run from the repository root:
+Run from the repository root (Hydra overrides pick the base model; GPT-2 by default):
 
-    uv run python -m src.multitask_train --config configs/gpt2_multitask.yaml
-    uv run python -m src.multitask_train --model-id models:/gpt2-pubmed-dapt@champion
-    uv run python -m src.multitask_train --sweep
+    uv run python -m src.multitask_train --base original model=qwen3-1.7b
+    uv run python -m src.multitask_train --base dapt model=qwen3-1.7b
+    uv run python -m src.multitask_train --sweep model=qwen3-1.7b
+
+`--base original` fine-tunes the Hub model, `--base dapt` the PubMed-pretrained
+one (`finetune.dapt_model_id`). A full run writes `results/<model>/finetune_<base>.json`.
 
 Each seed in `finetune.seeds` trains one model as a nested MLflow run under a
 `multitask-<base>` run. The training set holds `training.max_epochs` mixture
@@ -29,7 +32,6 @@ import optuna
 import torch
 from datasets import Dataset, DatasetDict
 from transformers import (
-    AutoModelForCausalLM,
     AutoTokenizer,
     EarlyStoppingCallback,
     PreTrainedModel,
@@ -44,8 +46,9 @@ from trl import SFTConfig, SFTTrainer
 from src.choice_eval import evaluate_choice_task
 from src.config import Hyperparameters, MultitaskConfig, load_multitask_config
 from src.evaluation import evaluate
-from src.modeling import get_device, resolve_model_source
+from src.modeling import get_device, load_causal_lm, resolve_model_source
 from src.multitask import MEDMCQA_LETTERS, PUBMEDQA_DECISIONS, load_multitask
+from src.report import BASES, save_stage_result
 from src.tracking import configure_tracking, log_best_model, start_stage_run
 from src.train import OptunaPruningCallback, free_gpu_memory, suggest_hyperparameters
 
@@ -119,6 +122,7 @@ def build_multitask_sft_config(
         metric_for_best_model="eval_combined_loss",
         greater_is_better=False,
         bf16=torch.cuda.is_available(),
+        gradient_checkpointing=config.finetune.gradient_checkpointing,
         seed=seed,
         report_to="mlflow",
     )
@@ -185,9 +189,22 @@ def evaluate_on_tasks(
 def evaluate_model(model_id: str, config: MultitaskConfig, prefix: str = "test") -> dict[str, float]:
     """Load a model (Hub id, path or MLflow URI) and score it with `evaluate_on_tasks`."""
     source: str = resolve_model_source(model_id)
-    model = AutoModelForCausalLM.from_pretrained(source).to(get_device())
+    model = load_causal_lm(source).to(get_device())
     tokenizer = AutoTokenizer.from_pretrained(source)
     return evaluate_on_tasks(model, tokenizer, load_multitask(config.multitask.processed_dir), config, prefix)
+
+
+def base_model_id(config: MultitaskConfig, base: str) -> str:
+    """Model to fine-tune: the Hub model (`original`) or the PubMed-pretrained one (`dapt`).
+
+    Raises:
+        ValueError: If `base` is not one of `BASES`.
+    """
+    if base == "original":
+        return config.model.model_id
+    if base == "dapt":
+        return config.finetune.dapt_model_id
+    raise ValueError(f"base must be one of {BASES}, got {base!r}")
 
 
 def model_label(model_id: str) -> str:
@@ -226,7 +243,7 @@ def train_multitask(
     ) as run:
         mlflow.log_params({"examples_per_epoch": stats["examples_per_epoch"], "epoch_steps": epoch_steps})
         trainer = SFTTrainer(
-            model=AutoModelForCausalLM.from_pretrained(source),
+            model=load_causal_lm(source),
             args=build_multitask_sft_config(config, output_dir, seed, epoch_steps),
             train_dataset=splits["train"].select_columns(SFT_COLUMNS),
             eval_dataset={name: splits[f"dev_{name}"].select_columns(SFT_COLUMNS) for name in DEV_SETS},
@@ -251,32 +268,36 @@ def train_multitask(
     return {"run_id": run.info.run_id, "model_dir": str(best_dir), **summary}
 
 
-def run_multitask_seeds(config: MultitaskConfig, model_id: str | None = None) -> dict[str, Any]:
-    """Fine-tune every seed in `finetune.seeds` and summarize them.
+def run_multitask_seeds(config: MultitaskConfig, base: str) -> dict[str, Any]:
+    """Fine-tune every seed in `finetune.seeds` from one starting point and summarize them.
 
-    Logs a `multitask-<base>` MLflow run with the configuration, the mean and
+    Logs a `multitask-<model>` MLflow run with the configuration, the mean and
     standard deviation of every metric, and one nested run per seed. The seed
     with the lowest dev loss is registered as
     `models:/<registered_model_name>@<base>-best`.
 
     Args:
         config: Multitask configuration.
-        model_id: Base model; defaults to `config.model.model_id`.
+        base: `original` or `dapt` (see `base_model_id`).
 
     Returns:
-        Per-seed results and their summary.
+        The starting model, the parent run id, the registered model, per-seed
+        results and their summary.
     """
-    base: str = model_id or config.model.model_id
+    model_id: str = base_model_id(config, base)
     splits: DatasetDict = load_multitask(config.multitask.processed_dir)
     configure_tracking(config)
 
     with start_stage_run(
-        "finetune", f"multitask-{model_label(base)}", config, {"task": "multitask", "base_model": base}
-    ):
+        "finetune",
+        f"multitask-{model_label(model_id)}",
+        config,
+        {"task": "multitask", "base_model": model_id, "finetune_base": base},
+    ) as parent:
         mlflow.log_dict(asdict(config), "config.json")
         mlflow.log_artifact(str(Path(config.multitask.processed_dir) / "stats.json"), "data")
         results: list[dict[str, Any]] = [
-            train_multitask(config, base, seed, splits) for seed in config.finetune.seeds
+            train_multitask(config, model_id, seed, splits) for seed in config.finetune.seeds
         ]
         summary = summarize_seeds(results)
         mlflow.log_metrics({f"{key}_mean": value["mean"] for key, value in summary.items()})
@@ -284,14 +305,21 @@ def run_multitask_seeds(config: MultitaskConfig, model_id: str | None = None) ->
         mlflow.log_dict({"results": results, "summary": summary}, "seed_results.json")
 
         best = min(results, key=itemgetter("best_dev_combined_loss"))
-        log_best_model(
-            best["run_id"],
-            best["model_dir"],
-            config.mlflow.registered_model_name,
-            alias=f"{model_label(base).replace('@', '-')}-best",
-        )
+        alias = f"{base}-best"
+        log_best_model(best["run_id"], best["model_dir"], config.mlflow.registered_model_name, alias)
 
-    return {"results": results, "summary": summary}
+    return {
+        "base": base,
+        "model_id": model_id,
+        "parent_run_id": parent.info.run_id,
+        "registered_model_uri": f"models:/{config.mlflow.registered_model_name}@{alias}",
+        "seeds": [
+            {"seed": seed, "run_id": result["run_id"], "model_dir": result["model_dir"]}
+            for seed, result in zip(config.finetune.seeds, results)
+        ],
+        "results": results,
+        "summary": summary,
+    }
 
 
 class StopAfterStepsCallback(TrainerCallback):
@@ -384,7 +412,7 @@ def sweep_objective(
     ) as run:
         trial.set_user_attr("mlflow_run_id", run.info.run_id)
         trainer = SFTTrainer(
-            model=AutoModelForCausalLM.from_pretrained(model_source),
+            model=load_causal_lm(model_source),
             args=build_multitask_sft_config(
                 config, trial_dir, config.seed, eval_steps, hyperparameters, save_models=False
             ),
@@ -417,7 +445,7 @@ def sweep_objective(
 def run_multitask_sweep(config: MultitaskConfig) -> tuple[dict[str, Any], list[dict[str, Any]], optuna.Study]:
     """Optuna search (TPE + median pruning) over the multitask fine-tuning hyperparameters.
 
-    Always starts from `config.model.model_id` (the original GPT-2), so the
+    Always starts from `config.model.model_id` (the Hub model), so the
     pretrained model is later fine-tuned with values it did not influence.
     Logs a `multitask-sweep` MLflow run with one nested run per trial.
 
@@ -464,19 +492,20 @@ def run_multitask_sweep(config: MultitaskConfig) -> tuple[dict[str, Any], list[d
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multitask fine-tuning on MedText, PubMedQA and MedMCQA.")
-    parser.add_argument("--config", default="configs/gpt2_multitask.yaml")
-    parser.add_argument("--model-id", help="Base model (default: model.model_id from the config)")
+    parser.add_argument("overrides", nargs="*", help="Hydra overrides, for example model=qwen3-1.7b")
+    parser.add_argument("--base", choices=BASES, default="original", help="Model to fine-tune")
     parser.add_argument(
         "--sweep", action="store_true", help="Run the Optuna search from the sweep section instead"
     )
     args = parser.parse_args()
 
-    config: MultitaskConfig = load_multitask_config(args.config)
+    config: MultitaskConfig = load_multitask_config(args.overrides)
     if args.sweep:
         run_multitask_sweep(config)
         return
 
-    outcome = run_multitask_seeds(config, args.model_id)
+    outcome = run_multitask_seeds(config, args.base)
+    save_stage_result(config.results_dir, f"finetune_{args.base}", outcome)
     print(json.dumps(outcome["summary"], indent=2))
 
 

@@ -1,4 +1,6 @@
 import asyncio
+import stat
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,17 +13,18 @@ from src.geval import (
     GEVAL_METRICS,
     build_geval_metrics,
     build_judge,
+    JudgeServer,
+    build_serve_command,
     build_test_cases,
     score_test_cases,
-    seed_model_dir,
+    server_is_up,
     summarize_geval,
 )
 
-MULTITASK_CONFIG_PATH = Path("configs/gpt2_multitask.yaml").resolve()
 
 
 def load() -> MultitaskConfig:
-    return load_multitask_config(MULTITASK_CONFIG_PATH)
+    return load_multitask_config()
 
 
 class FakeJudge(DeepEvalBaseLLM):
@@ -107,9 +110,49 @@ def test_summarize_geval_averages_scores_and_ignores_reasons() -> None:
     assert summary == pytest.approx({"test_medtext_geval_correctness": 0.4, "test_medtext_geval_coherence": 0.5})
 
 
-def test_seed_model_dir_follows_the_training_layout() -> None:
-    config = load()
+def test_build_serve_command_runs_vllm_on_the_configured_port() -> None:
+    geval = replace(load().geval, base_url="http://localhost:8123/v1")
 
-    model_dir = seed_model_dir(config, base_model="models:/gpt2-pubmed-dapt@candidate", seed="43")
+    command = build_serve_command(geval)
 
-    assert model_dir == Path(config.finetune.output_dir) / "gpt2-pubmed-dapt@candidate-seed43" / "best"
+    assert command[:3] == [str(Path(geval.vllm_bin) / "vllm"), "serve", geval.judge_model]
+    assert "--port=8123" in command
+    assert command[-len(geval.serve_args) :] == geval.serve_args
+
+
+def test_server_is_up_is_false_when_nothing_listens() -> None:
+    assert server_is_up("http://localhost:9/v1") is False
+
+
+def fake_vllm(directory: Path, script: str) -> GEvalConfig:
+    """GEval config whose `vllm` is a shell script, on a port where nothing listens."""
+    executable = directory / "vllm"
+    executable.write_text("#!/bin/sh\n" + script + "\n")
+    executable.chmod(executable.stat().st_mode | stat.S_IEXEC)
+    return replace(
+        load().geval,
+        base_url="http://localhost:9/v1",
+        vllm_bin=str(directory),
+        server_log=str(directory / "vllm.log"),
+        startup_timeout=2,
+    )
+
+
+def test_judge_server_reports_a_server_that_exits(tmp_path: Path) -> None:
+    geval = fake_vllm(tmp_path, "echo 'bad flag'; exit 1")
+
+    with pytest.raises(RuntimeError, match="vllm.log"):
+        with JudgeServer(geval):
+            pass
+
+    assert "bad flag" in (tmp_path / "vllm.log").read_text()
+
+
+def test_judge_server_stops_a_server_that_never_gets_ready(tmp_path: Path) -> None:
+    geval = fake_vllm(tmp_path, "sleep 600")
+    server = JudgeServer(geval)
+
+    with pytest.raises(TimeoutError):
+        server.__enter__()
+
+    assert server.process is not None and server.process.poll() is not None

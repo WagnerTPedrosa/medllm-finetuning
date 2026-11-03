@@ -14,12 +14,11 @@ from src.pretrain import (
 )
 from src.tracking import configure_tracking
 
-PRETRAIN_CONFIG_PATH = Path("configs/gpt2_pubmed_pretrain.yaml").resolve()
 EOS = 50256
 
 
 def load() -> PretrainConfig:
-    return load_pretrain_config(PRETRAIN_CONFIG_PATH)
+    return load_pretrain_config()
 
 
 def test_load_pretrain_config_reads_pretraining_section() -> None:
@@ -55,6 +54,7 @@ def test_build_training_arguments_follows_config(tmp_path: Path) -> None:
     assert args.save_total_limit == training.save_total_limit
     assert args.torch_compile == training.torch_compile
     assert args.optim == training.optim
+    assert args.gradient_checkpointing == training.gradient_checkpointing
 
 
 def test_build_training_arguments_overrides_max_steps_for_smoke_runs(tmp_path: Path) -> None:
@@ -94,8 +94,9 @@ def test_load_pretrain_config_reads_lr_sweep_section() -> None:
 def test_with_learning_rate_returns_a_new_config() -> None:
     config = load()
 
-    updated = with_learning_rate(config, 3e-4)
+    updated = with_learning_rate(config, 1e-4)
 
-    assert updated.pretraining.learning_rate == 3e-4
-    assert config.pretraining.learning_rate == 1e-4
+    assert updated.pretraining.learning_rate == 1e-4
+    assert config.pretraining.learning_rate == 3e-4
+    assert updated is not config
     assert updated.corpus == config.corpus

@@ -44,6 +44,22 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
+def load_causal_lm(model_id: str) -> PreTrainedModel:
+    """Load a causal language model with float32 weights.
+
+    Transformers loads weights in the dtype they were saved in, which is bf16
+    for most recent Hub models. Training keeps float32 weights and uses bf16
+    only for the computations (mixed precision), so small updates are not lost.
+
+    Args:
+        model_id: Hub id, local checkpoint directory or MLflow model URI.
+
+    Returns:
+        The model, on the CPU.
+    """
+    return AutoModelForCausalLM.from_pretrained(resolve_model_source(model_id), dtype=torch.float32)
+
+
 def load_model(model_id: str) -> tuple[PreTrainedModel, torch.device]:
     """Load a causal language model onto the best available device.
 
@@ -55,9 +71,7 @@ def load_model(model_id: str) -> tuple[PreTrainedModel, torch.device]:
     """
     device: torch.device = get_device()
 
-    model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
-        resolve_model_source(model_id)
-    )
+    model: PreTrainedModel = load_causal_lm(model_id)
     model.config.use_cache = False
     model.to(device)
 

@@ -1,0 +1,8 @@
+{
+  "run_id": "62c9187c535c45c8821ba7d1780e61e2",
+  "model_dir": "checkpoints/pretrain/gpt2-pubmed-dapt/final",
+  "eval_loss": 2.47921085357666,
+  "eval_perplexity": 11.931844728989333,
+  "model_id": "m-baf847cf124f4331b4676d3153190ce8",
+  "model_uri": "models:/gpt2-pubmed-dapt@candidate"
+}

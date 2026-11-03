@@ -1,10 +1,20 @@
-"""Typed access to the experiment configuration in `configs/*.yaml`."""
+"""Typed access to the experiment configuration in `configs/`.
+
+The pipeline configuration (`configs/config.yaml` plus one file per base model
+in `configs/model/`) is composed by Hydra. The first single-task experiment
+still reads its own file, `configs/gpt2_medtext.yaml`, with `load_config`.
+"""
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
+
+# The repository's config directory, wherever the process was started from
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "configs"
 
 HyperparameterValue = float | int | str
 Hyperparameters = dict[str, HyperparameterValue]
@@ -123,6 +133,7 @@ class PretrainingConfig:
     optim: str
     dataloader_num_workers: int
     registry_alias: str
+    gradient_checkpointing: bool
 
 
 @dataclass(frozen=True)
@@ -139,6 +150,7 @@ class PretrainConfig:
     corpus: CorpusConfig
     pretraining: PretrainingConfig
     lr_sweep: LRSweepConfig
+    results_dir: str
 
 
 def parse_search_space(raw_space: dict[str, Any]) -> SearchSpace:
@@ -208,33 +220,51 @@ def load_config(path: str | Path) -> Config:
     )
 
 
-def load_pretrain_config(path: str | Path) -> PretrainConfig:
-    """Load a continued-pretraining configuration from a YAML file.
+def compose_config(overrides: list[str] | None = None) -> dict[str, Any]:
+    """Compose `configs/config.yaml` with Hydra and resolve every interpolation.
 
     Args:
-        path: Path to the YAML file.
+        overrides: Hydra overrides, for example `["model=qwen3-1.7b"]`.
+
+    Returns:
+        The resolved configuration as plain dicts and lists.
+
+    Raises:
+        hydra.errors.MissingConfigException: If an override names an unknown model file.
+        omegaconf.errors.MissingMandatoryValue: If a `???` value is left unset.
+    """
+    with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base="1.3"):
+        config = compose(config_name="config", overrides=overrides or [])
+    return OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
+
+
+def load_pretrain_config(overrides: list[str] | None = None) -> PretrainConfig:
+    """Continued-pretraining configuration of the selected base model.
+
+    Args:
+        overrides: Hydra overrides (see `compose_config`); the default model is GPT-2.
 
     Returns:
         The typed configuration (with `~` in `corpus.raw_dir` expanded).
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        KeyError: If a required section is missing.
-        TypeError: If a section has missing or unknown fields.
     """
-    with open(path) as file:
-        raw: dict[str, Any] = yaml.safe_load(file)
+    raw: dict[str, Any] = compose_config(overrides)
 
     corpus_section: dict[str, Any] = dict(raw["corpus"])
     corpus_section["raw_dir"] = str(Path(corpus_section["raw_dir"]).expanduser())
 
     return PretrainConfig(
         seed=raw["seed"],
-        mlflow=MLflowConfig(**raw["mlflow"]),
-        model=ModelConfig(**raw["model"]),
+        mlflow=MLflowConfig(
+            tracking_uri=raw["mlflow"]["tracking_uri"],
+            experiment_name=raw["mlflow"]["pretrain_experiment"],
+            registered_model_name=raw["mlflow"]["pretrain_registered_model"],
+            log_system_metrics=raw["mlflow"]["log_system_metrics"],
+        ),
+        model=ModelConfig(model_id=raw["model"]["model_id"], max_seq_len=raw["model"]["max_seq_len"]),
         corpus=CorpusConfig(**corpus_section),
         pretraining=PretrainingConfig(**raw["pretraining"]),
         lr_sweep=LRSweepConfig(**raw["lr_sweep"]),
+        results_dir=raw["results_dir"],
     )
 
 
@@ -247,6 +277,7 @@ class MultitaskDataConfig:
     pubmedqa_validation_size: int
     medmcqa_dataset_id: str
     medmcqa_dev_fraction: float
+    mixture_epochs: int
     medtext_repeats: int
     pubmedqa_labeled_repeats: int
     pubmedqa_artificial_per_class: int
@@ -256,11 +287,21 @@ class MultitaskDataConfig:
 
 
 @dataclass(frozen=True)
+class DataFilterConfig:
+    """Tokenizer and length limit that decide which fine-tuning examples are dropped."""
+
+    tokenizer: str
+    max_seq_len: int
+
+
+@dataclass(frozen=True)
 class FinetuneConfig:
     learning_rate: float
     batch_size: int
+    gradient_checkpointing: bool
     seeds: list[int]
     output_dir: str
+    dapt_model_id: str
 
 
 @dataclass(frozen=True)
@@ -279,6 +320,10 @@ class MultitaskSweepConfig:
 class GEvalConfig:
     judge_model: str
     base_url: str
+    vllm_bin: str
+    serve_args: list[str]
+    startup_timeout: int
+    server_log: str
     max_new_tokens: int
     max_concurrent: int
     num_examples: int | None
@@ -290,39 +335,44 @@ class MultitaskConfig:
     mlflow: MLflowConfig
     model: ModelConfig
     training: TrainingConfig
+    data_filter: DataFilterConfig
     multitask: MultitaskDataConfig
     finetune: FinetuneConfig
     sweep: MultitaskSweepConfig
     geval: GEvalConfig
+    results_dir: str
 
 
-def load_multitask_config(path: str | Path) -> MultitaskConfig:
-    """Load a multitask fine-tuning configuration from a YAML file.
+def load_multitask_config(overrides: list[str] | None = None) -> MultitaskConfig:
+    """Multitask fine-tuning and G-Eval configuration of the selected base model.
 
     Args:
-        path: Path to the YAML file.
+        overrides: Hydra overrides (see `compose_config`); the default model is GPT-2.
 
     Returns:
-        The typed configuration.
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        KeyError: If a required section is missing.
-        TypeError: If a section has missing or unknown fields.
+        The typed configuration (with `~` in `geval.vllm_bin` expanded).
     """
-    with open(path) as file:
-        raw: dict[str, Any] = yaml.safe_load(file)
+    raw: dict[str, Any] = compose_config(overrides)
 
     sweep_section: dict[str, Any] = dict(raw["sweep"])
     sweep_section["search_space"] = parse_search_space(sweep_section["search_space"])
+    geval_section: dict[str, Any] = dict(raw["geval"])
+    geval_section["vllm_bin"] = str(Path(geval_section["vllm_bin"]).expanduser())
 
     return MultitaskConfig(
         seed=raw["seed"],
-        mlflow=MLflowConfig(**raw["mlflow"]),
-        model=ModelConfig(**raw["model"]),
+        mlflow=MLflowConfig(
+            tracking_uri=raw["mlflow"]["tracking_uri"],
+            experiment_name=raw["mlflow"]["multitask_experiment"],
+            registered_model_name=raw["mlflow"]["multitask_registered_model"],
+            log_system_metrics=raw["mlflow"]["log_system_metrics"],
+        ),
+        model=ModelConfig(model_id=raw["model"]["model_id"], max_seq_len=raw["model"]["max_seq_len"]),
         training=TrainingConfig(**raw["training"]),
+        data_filter=DataFilterConfig(**raw["data_filter"]),
         multitask=MultitaskDataConfig(**raw["multitask"]),
         finetune=FinetuneConfig(**raw["finetune"]),
         sweep=MultitaskSweepConfig(**sweep_section),
-        geval=GEvalConfig(**raw["geval"]),
+        geval=GEvalConfig(**geval_section),
+        results_dir=raw["results_dir"],
     )

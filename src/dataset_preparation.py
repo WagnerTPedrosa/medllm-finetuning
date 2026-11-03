@@ -1,5 +1,6 @@
 """Download, clean, filter and split the MedText dataset."""
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any, Protocol
@@ -10,7 +11,7 @@ from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 from huggingface_hub import HfApi
 from transformers import AutoTokenizer
 
-from src.config import Config
+from src.config import Config, load_config
 from src.formatting import format_prompt
 
 RAW_COLUMNS = ["Prompt", "Completion"]
@@ -197,3 +198,15 @@ def load_medtext(processed_dir: str | Path) -> tuple[Dataset, Dataset, Dataset]:
     """
     splits: DatasetDict = load_from_disk(str(processed_dir))
     return splits["train"], splits["validation"], splits["test"]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Download, clean and split MedText.")
+    parser.add_argument("--config", default="configs/gpt2_medtext.yaml")
+    args = parser.parse_args()
+
+    prepare_dataset(load_config(args.config))
+
+
+if __name__ == "__main__":
+    main()

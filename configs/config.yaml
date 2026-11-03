@@ -1,0 +1,177 @@
+# Configuration of the whole pipeline (PubMed pretraining, multitask
+# fine-tuning, G-Eval), composed by Hydra. The base model is a config group:
+#
+#   uv run python -m src.pretrain model=qwen3-1.7b
+#
+# picks configs/model/qwen3-1.7b.yaml, which fills in every `???` below.
+# The DVC stages in dvc.yaml track the keys they use from these files.
+# Floats need a decimal point (1.0e-5, not 1e-5): YAML reads 1e-5 as a string.
+
+defaults:
+  - _self_
+  - model: gpt2
+
+seed: 42
+
+mlflow:
+  tracking_uri: sqlite:///mlflow.db
+  # CPU, RAM and GPU usage per run (needs nvidia-ml-py for the GPU)
+  log_system_metrics: true
+  pretrain_experiment: ${model.name}-pubmed-pretrain
+  pretrain_registered_model: ${model.name}-pubmed-dapt
+  multitask_experiment: ${model.name}-med-multitask
+  multitask_registered_model: ${model.name}-med-multitask
+
+# Small JSON summary of every pipeline stage (run ids, model URIs, metrics)
+results_dir: results/${model.name}
+
+# Set by the model file
+model:
+  # Short name used in MLflow names and paths; equal to the model file name
+  name: ???
+  model_id: ???
+  # Packed block size for pretraining and maximum length for fine-tuning
+  max_seq_len: ???
+
+# Continued (domain-adaptive) pretraining corpus, tokenized with each model's tokenizer
+corpus:
+  # JSONL shards written by pubmed-extractor/build_corpus.py (never modified)
+  raw_dir: ~/Documents/Projects/pubmed-corpus
+  processed_dir: data/processed/pubmed_v1_${model.name}
+  # Held-out documents for validation perplexity, sampled within each stratum
+  validation_fraction: 0.01
+  # Templated administrative sections (funding, ethics, author contributions, ...)
+  remove_boilerplate_sections: true
+  # Inline markers such as [1-3] and (Smith et al., 2020)
+  remove_citations: true
+  # Articles used by this benchmark are removed from the corpus (decontamination)
+  benchmark_dataset_id: qiaojin/PubMedQA
+  benchmark_subset: pqa_labeled
+  num_proc: 16
+
+pretraining:
+  output_dir: checkpoints/pretrain/${model.name}-pubmed-dapt
+  learning_rate: ???
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  weight_decay: 0.1
+  max_grad_norm: 1.0
+  num_train_epochs: 1.0
+  # About 0.5M tokens per optimizer step: batch x accumulation x max_seq_len
+  per_device_batch_size: ???
+  gradient_accumulation_steps: ???
+  eval_batch_size: ???
+  # Recompute activations in the backward pass: less memory, about 30% slower
+  gradient_checkpointing: ???
+  eval_steps: 100
+  save_steps: 100
+  save_total_limit: 2
+  logging_steps: 10
+  bf16: true
+  # Compile the model graph (slower first steps, faster afterwards)
+  torch_compile: true
+  optim: adamw_torch_fused
+  dataloader_num_workers: 4
+  # Alias set on the registered model after a full run (promote to champion by hand)
+  registry_alias: candidate
+
+# Short runs to compare peak learning rates before the full run (not a DVC stage:
+# copy the chosen rate into the model file). Each run decays its cosine schedule
+# over max_steps, so short runs favour higher rates: use the sweep to rule out
+# bad values, not to pick precisely.
+lr_sweep:
+  learning_rates: ???
+  max_steps: 150
+
+# Fine-tuning data, shared by every model. The same tokenizer and length limit
+# decide which examples are dropped, so all models are trained and tested on
+# exactly the same examples.
+data_filter:
+  tokenizer: openai-community/gpt2
+  max_seq_len: 1024
+
+multitask:
+  processed_dir: data/processed/multitask_v1
+  medtext_dir: data/processed/medtext_v1
+  pubmedqa_dataset_id: qiaojin/PubMedQA
+  pubmedqa_test_ground_truth: data/benchmarks/pubmedqa_test_ground_truth.json
+  # PQA-L questions outside the official test set: 450 train / 50 validation
+  pubmedqa_validation_size: 50
+  medmcqa_dataset_id: openlifescienceai/medmcqa
+  # Held out from MedMCQA train for model selection (official validation = test)
+  medmcqa_dev_fraction: 0.05
+  # Mixture epochs built into the training set; early stopping usually ends training sooner
+  mixture_epochs: 5
+  # Examples per mixture epoch
+  medtext_repeats: 5
+  pubmedqa_labeled_repeats: 5
+  # PQA-A is 93% "yes": sample this many of each decision per epoch
+  pubmedqa_artificial_per_class: 15000
+  medmcqa_per_epoch: 60000
+  # MedMCQA questions in the combined dev set used for early stopping
+  dev_medmcqa_size: 150
+  num_proc: 16
+
+training:
+  max_epochs: ${multitask.mixture_epochs}
+  early_stopping_patience: 2
+  eval_batch_size: 8
+  max_grad_norm: 1.0
+  weight_decay: 0.01
+  lr_scheduler_type: constant
+  warmup_ratio: 0.05
+
+finetune:
+  # Chosen with the sweep below, per model
+  learning_rate: ???
+  batch_size: ???
+  gradient_checkpointing: ???
+  seeds: [42, 43, 44]
+  output_dir: checkpoints/multitask
+  # Model fine-tuned by `--base dapt`: the result of the pretraining stage
+  dapt_model_id: models:/${mlflow.pretrain_registered_model}@${pretraining.registry_alias}
+
+# Optuna search on the original model before the full runs (not a DVC stage:
+# copy the best values into the model file, so the final runs are reproducible from git)
+sweep:
+  n_trials: 12
+  # A mapping with low/high is a float range; a list is a categorical choice
+  search_space:
+    learning_rate: ???
+    batch_size: [8, 16, 32]
+    lr_scheduler_type: [constant, cosine]
+    warmup_ratio: [0.0, 0.05]
+  # Budget per trial, in mixture epochs (the first epoch of the training set)
+  train_epochs: 1.0
+  # Dev evaluations per mixture epoch (each one is a pruning checkpoint)
+  evals_per_epoch: 4
+  # Let this many trials finish before pruning, and never prune at the first evaluation
+  pruner_startup_trials: 4
+  pruner_warmup_evals: 1
+  results_path: experiments/${model.name}_multitask_sweep_results.json
+  trials_dir: checkpoints/multitask_sweep
+
+# LLM-as-judge (G-Eval) on the generated MedText test answers. The answers are
+# generated first; then the judge is served by vLLM (started and stopped by the
+# stage, unless a server is already listening at base_url). vLLM is installed
+# apart from the project with `uv tool install vllm`.
+geval:
+  judge_model: Qwen/Qwen3.8-27B
+  base_url: http://localhost:8000/v1
+  # Holds `vllm` and the `ninja` it needs to compile kernels
+  vllm_bin: ~/.local/share/uv/tools/vllm/bin
+  serve_args:
+    - --max-model-len=8192
+    - --gpu-memory-utilization=0.85
+    - --reasoning-parser=qwen3
+    # The judge is a hybrid model: its Mamba cache limits the parallel sequences
+    - --max-num-seqs=64
+  # Seconds to wait for the server (it compiles kernels on the first start)
+  startup_timeout: 1200
+  server_log: logs/vllm.log
+  # Answers are generated greedily by the fine-tuned model
+  max_new_tokens: 256
+  # Judge requests in flight at once (vLLM batches them)
+  max_concurrent: 32
+  # null scores the whole MedText test set; a number scores the first N (quick checks)
+  num_examples: null

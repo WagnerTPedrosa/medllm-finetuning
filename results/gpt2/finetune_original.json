@@ -1,0 +1,88 @@
+{
+  "base": "original",
+  "model_id": "openai-community/gpt2",
+  "parent_run_id": "af911bb3a3cd407a9cb5465958f68904",
+  "registered_model_uri": "models:/gpt2-med-multitask@original-best",
+  "seeds": [
+    {
+      "seed": 42,
+      "run_id": "fa0b49b87bd8462081b236e4da34a5b3",
+      "model_dir": "checkpoints/multitask/gpt2-seed42/best"
+    },
+    {
+      "seed": 43,
+      "run_id": "1cbbaedd6ae245029279f2ba210392ca",
+      "model_dir": "checkpoints/multitask/gpt2-seed43/best"
+    },
+    {
+      "seed": 44,
+      "run_id": "951985b82fd442cd852f45a2d08b022c",
+      "model_dir": "checkpoints/multitask/gpt2-seed44/best"
+    }
+  ],
+  "results": [
+    {
+      "run_id": "fa0b49b87bd8462081b236e4da34a5b3",
+      "model_dir": "checkpoints/multitask/gpt2-seed42/best",
+      "best_dev_combined_loss": 2.293447256088257,
+      "mixture_epochs_trained": 3.0,
+      "test_medmcqa_accuracy": 0.336283185840708,
+      "test_medmcqa_macro_f1": 0.20050829698256295,
+      "test_medtext_loss": 2.0444560050964355,
+      "test_pubmedqa_accuracy": 0.62,
+      "test_pubmedqa_macro_f1": 0.4372132132132132
+    },
+    {
+      "run_id": "1cbbaedd6ae245029279f2ba210392ca",
+      "model_dir": "checkpoints/multitask/gpt2-seed43/best",
+      "best_dev_combined_loss": 2.2780845165252686,
+      "mixture_epochs_trained": 3.0,
+      "test_medmcqa_accuracy": 0.2882085625448457,
+      "test_medmcqa_macro_f1": 0.24203684784538745,
+      "test_medtext_loss": 2.0305144786834717,
+      "test_pubmedqa_accuracy": 0.64,
+      "test_pubmedqa_macro_f1": 0.4492811356969543
+    },
+    {
+      "run_id": "951985b82fd442cd852f45a2d08b022c",
+      "model_dir": "checkpoints/multitask/gpt2-seed44/best",
+      "best_dev_combined_loss": 2.2695610523223877,
+      "mixture_epochs_trained": 3.0,
+      "test_medmcqa_accuracy": 0.28605596747189665,
+      "test_medmcqa_macro_f1": 0.22138971310352282,
+      "test_medtext_loss": 2.0273351669311523,
+      "test_pubmedqa_accuracy": 0.654,
+      "test_pubmedqa_macro_f1": 0.4545647003150646
+    }
+  ],
+  "summary": {
+    "best_dev_combined_loss": {
+      "mean": 2.2803642749786377,
+      "std": 0.01210519130540432
+    },
+    "mixture_epochs_trained": {
+      "mean": 3.0,
+      "std": 0.0
+    },
+    "test_medmcqa_accuracy": {
+      "mean": 0.3035159052858168,
+      "std": 0.028397701009223165
+    },
+    "test_medmcqa_macro_f1": {
+      "mean": 0.22131161931049106,
+      "std": 0.020764385571741175
+    },
+    "test_medtext_loss": {
+      "mean": 2.034101883570353,
+      "std": 0.009106749158578514
+    },
+    "test_pubmedqa_accuracy": {
+      "mean": 0.638,
+      "std": 0.017088007490635077
+    },
+    "test_pubmedqa_macro_f1": {
+      "mean": 0.4470196830750774,
+      "std": 0.008894051502671554
+    }
+  }
+}

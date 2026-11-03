@@ -22,11 +22,10 @@ from src.multitask import (
     stratified_sample_indices,
 )
 
-MULTITASK_CONFIG_PATH = Path("configs/gpt2_multitask.yaml").resolve()
 
 
 def load() -> MultitaskConfig:
-    return load_multitask_config(MULTITASK_CONFIG_PATH)
+    return load_multitask_config()
 
 
 def pubmedqa_rows(count: int, decisions: list[str]) -> Dataset:

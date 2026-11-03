@@ -1,14 +1,16 @@
 """LLM-as-judge evaluation (G-Eval) of the answers generated for the MedText test set.
 
-The fine-tuned models generate an answer for every MedText test question and a
-local judge model, served by vLLM, scores it against the reference answer on
-three criteria (correctness, completeness, coherence). Scores are logged to the
-seed runs of the latest `multitask-<base>` runs, and their mean and standard
-deviation to the parent runs, next to the other test metrics.
+Every seed of both fine-tuning runs of a base model (`results/<model>/finetune_*.json`)
+answers the MedText test questions. Then a local judge model, served by vLLM,
+scores each answer against the reference on three criteria (correctness,
+completeness, coherence). The answers are generated first, so the judge gets
+the GPU to itself. Scores are logged to the seed runs and their mean and
+standard deviation to the parent runs, next to the other test metrics.
 
-Run with the vLLM server up (see the `geval` section of the config):
+    uv run python -m src.geval model=qwen3-1.7b
 
-    uv run python -m src.geval --config configs/gpt2_multitask.yaml
+The stage starts the vLLM server and stops it at the end, unless a server is
+already listening at `geval.base_url` (see the `geval` section of the config).
 """
 
 import os
@@ -19,9 +21,17 @@ os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "1")
 
 import argparse
 import asyncio
+import gc
 import json
+import signal
+import subprocess
+import time
 from pathlib import Path
+from types import TracebackType
 from typing import Any
+from urllib.error import URLError
+from urllib.parse import urlparse
+from urllib.request import urlopen
 
 import mlflow
 import pandas as pd
@@ -30,14 +40,15 @@ from datasets import Dataset
 from deepeval.metrics import GEval
 from deepeval.models import DeepEvalBaseLLM, LocalModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams
-from mlflow.entities import Metric, Run
+from mlflow.entities import Metric
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from src.config import GEvalConfig, MultitaskConfig, load_multitask_config
 from src.inference import generate_completion
 from src.modeling import load_model
 from src.multitask import load_multitask
-from src.multitask_train import model_label, summarize_seeds
+from src.multitask_train import summarize_seeds
+from src.report import BASES, load_stage_result, save_stage_result
 from src.tracking import configure_tracking
 
 METRIC_PREFIX = "test_medtext_geval"
@@ -186,9 +197,86 @@ def summarize_geval(
     }
 
 
-def seed_model_dir(config: MultitaskConfig, base_model: str, seed: str) -> Path:
-    """Directory where `train_multitask` saved the best epoch of a seed."""
-    return Path(config.finetune.output_dir) / f"{model_label(base_model)}-seed{seed}" / "best"
+def build_serve_command(geval_config: GEvalConfig) -> list[str]:
+    """`vllm serve` command for the judge, on the port of `base_url`."""
+    port: int | None = urlparse(geval_config.base_url).port
+    return [
+        str(Path(geval_config.vllm_bin) / "vllm"),
+        "serve",
+        geval_config.judge_model,
+        f"--port={port}",
+        *geval_config.serve_args,
+    ]
+
+
+def server_is_up(base_url: str) -> bool:
+    """Whether an OpenAI-compatible server answers at `base_url`."""
+    try:
+        with urlopen(f"{base_url}/models", timeout=2):
+            return True
+    except (URLError, ConnectionError, TimeoutError):
+        return False
+
+
+class JudgeServer:
+    """Context manager that serves the judge with vLLM while the answers are scored.
+
+    A server already listening at `base_url` is used as it is and left running.
+    Otherwise vLLM is started (output in `server_log`) and stopped on exit.
+    """
+
+    def __init__(self, geval_config: GEvalConfig) -> None:
+        self.config = geval_config
+        self.process: subprocess.Popen[bytes] | None = None
+
+    def __enter__(self) -> "JudgeServer":
+        if server_is_up(self.config.base_url):
+            print(f"Using the judge server already running at {self.config.base_url}")
+            return self
+
+        log_path = Path(self.config.server_log)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("wb") as log_file:
+            # vLLM compiles kernels with the `ninja` installed next to it
+            env: dict[str, str] = {**os.environ, "PATH": f"{self.config.vllm_bin}:{os.environ['PATH']}"}
+            # Its own process group, so the engine processes vLLM starts are stopped with it
+            self.process = subprocess.Popen(
+                build_serve_command(self.config),
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True,
+            )
+        print(f"Starting the judge server ({self.config.judge_model}), log in {log_path}")
+
+        deadline: float = time.monotonic() + self.config.startup_timeout
+        while not server_is_up(self.config.base_url):
+            if self.process.poll() is not None:
+                raise RuntimeError(f"The judge server exited with code {self.process.returncode}; see {log_path}")
+            if time.monotonic() > deadline:
+                self.stop()
+                raise TimeoutError(f"The judge server did not start in {self.config.startup_timeout} s; see {log_path}")
+            time.sleep(5)
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.stop()
+
+    def stop(self) -> None:
+        """Stop the server this object started (no-op for a server it did not start)."""
+        if self.process is None or self.process.poll() is not None:
+            return
+        os.killpg(self.process.pid, signal.SIGTERM)
+        try:
+            self.process.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            os.killpg(self.process.pid, signal.SIGKILL)
+            self.process.wait()
 
 
 def generate_answers(
@@ -205,68 +293,36 @@ def generate_answers(
     return answers
 
 
-def latest_multitask_runs(config: MultitaskConfig) -> dict[str, list[Run]]:
-    """Seed runs of the latest finished `multitask-<base>` run of each base model.
+def generate_seed_answers(model_dir: str, prompts: list[str], max_new_tokens: int) -> list[str]:
+    """Answers of one fine-tuned model; the model is freed from the GPU afterwards."""
+    print(f"Generating answers with {model_dir}")
+    model, device = load_model(model_dir)
+    model.config.use_cache = True  # load_model turns the cache off for training
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    answers: list[str] = generate_answers(model, tokenizer, prompts, device, max_new_tokens)
 
-    Returns:
-        `{parent run id: its seed runs}`.
-    """
-    experiment = mlflow.get_experiment_by_name(config.mlflow.experiment_name)
-    parents: list[Run] = mlflow.search_runs(
-        [experiment.experiment_id],
-        filter_string="tags.task = 'multitask' AND tags.stage = 'finetune' AND attributes.status = 'FINISHED'",
-        order_by=["start_time DESC"],
-        output_format="list",
-    )
-
-    seed_runs: dict[str, list[Run]] = {}
-    seen_bases: set[str] = set()
-    for parent in parents:
-        base: str = parent.data.tags["base_model"]
-        if "finetune_seed" in parent.data.tags or base in seen_bases:
-            continue
-        seen_bases.add(base)
-        seed_runs[parent.info.run_id] = mlflow.search_runs(
-            [experiment.experiment_id],
-            filter_string=f"tags.mlflow.parentRunId = '{parent.info.run_id}'",
-            output_format="list",
-        )
-    return seed_runs
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+    return answers
 
 
-def evaluate_seed_run(
-    run: Run, config: MultitaskConfig, judge: DeepEvalBaseLLM, test_set: Dataset
+def log_seed_scores(
+    run_id: str,
+    test_set: Dataset,
+    answers: list[str],
+    rows: list[dict[str, float | str]],
+    judge_model: str,
 ) -> dict[str, float]:
-    """Generate answers with a seed's best model, score them and log the results to its run.
-
-    Logs the mean score per criterion as metrics and every answer with the
-    judge's scores and reasons as the `geval/test_medtext.json` table.
+    """Log the mean score per criterion and the `geval/test_medtext.json` table to a seed run.
 
     Returns:
         The mean score per criterion.
     """
-    tags: dict[str, str] = run.data.tags
-    model_dir: Path = seed_model_dir(config, tags["base_model"], tags["finetune_seed"])
-    print(f"Generating answers with {model_dir}")
-
-    model, device = load_model(str(model_dir))
-    model.config.use_cache = True  # load_model turns the cache off for training
-    tokenizer = AutoTokenizer.from_pretrained(config.model.model_id)
-    answers: list[str] = generate_answers(
-        model, tokenizer, test_set["prompt"], device, config.geval.max_new_tokens
-    )
-    del model
-    torch.cuda.empty_cache()
-
-    print(f"Scoring {len(answers)} answers with {config.geval.judge_model}")
-    test_cases = build_test_cases(test_set["prompt"], answers, test_set["completion"])
-    rows = asyncio.run(score_test_cases(test_cases, judge, config.geval.max_concurrent))
     summary: dict[str, float] = summarize_geval(rows, list(GEVAL_METRICS), METRIC_PREFIX)
-
-    run_id: str = run.info.run_id
     client = mlflow.MlflowClient()
     client.log_batch(run_id, metrics=[Metric(key, value, 0, 0) for key, value in summary.items()])
-    client.set_tag(run_id, "geval_judge", config.geval.judge_model)
+    client.set_tag(run_id, "geval_judge", judge_model)
     table = pd.DataFrame(
         {"prompt": test_set["prompt"], "reference": test_set["completion"], "answer": answers}
     ).join(pd.DataFrame(rows))
@@ -274,42 +330,63 @@ def evaluate_seed_run(
     return summary
 
 
-def run_geval(config: MultitaskConfig) -> dict[str, dict[str, dict[str, float]]]:
-    """Score every seed of the latest multitask runs and log the mean and std per base model.
+def run_geval(config: MultitaskConfig) -> dict[str, Any]:
+    """Score every seed of both fine-tuning runs and log the mean and std per run.
 
     Returns:
-        `{base model: {metric: {"mean": ..., "std": ...}}}`.
+        The judge model and `{base: {metric: {"mean": ..., "std": ...}}}`.
     """
     configure_tracking(config)
     test_set: Dataset = load_multitask(config.multitask.processed_dir)["test_medtext"]
     if config.geval.num_examples is not None:
         test_set = test_set.select(range(min(config.geval.num_examples, len(test_set))))
-    judge = build_judge(config.geval)
+    finetunes: dict[str, dict[str, Any]] = {
+        base: load_stage_result(config.results_dir, f"finetune_{base}") for base in BASES
+    }
 
-    summaries: dict[str, dict[str, dict[str, float]]] = {}
+    answers_by_run: dict[str, list[str]] = {}
+    for finetune in finetunes.values():
+        for seed in finetune["seeds"]:
+            answers_by_run[seed["run_id"]] = generate_seed_answers(
+                seed["model_dir"], test_set["prompt"], config.geval.max_new_tokens
+            )
+
+    judge = build_judge(config.geval)
     client = mlflow.MlflowClient()
-    for parent_id, seed_runs in latest_multitask_runs(config).items():
-        results: list[dict[str, float]] = [
-            evaluate_seed_run(run, config, judge, test_set) for run in seed_runs
-        ]
-        summary = summarize_seeds(results)
-        metrics: list[Metric] = []
-        for key, value in summary.items():
-            metrics.append(Metric(f"{key}_mean", value["mean"], 0, 0))
-            metrics.append(Metric(f"{key}_std", value["std"], 0, 0))
-        client.log_batch(parent_id, metrics=metrics)
-        client.set_tag(parent_id, "geval_judge", config.geval.judge_model)
-        summaries[client.get_run(parent_id).data.tags["base_model"]] = summary
-    return summaries
+    summaries: dict[str, dict[str, dict[str, float]]] = {}
+    with JudgeServer(config.geval):
+        for base, finetune in finetunes.items():
+            seed_summaries: list[dict[str, float]] = []
+            for seed in finetune["seeds"]:
+                answers: list[str] = answers_by_run[seed["run_id"]]
+                print(f"Scoring {len(answers)} answers of {base} seed {seed['seed']} with {config.geval.judge_model}")
+                test_cases = build_test_cases(test_set["prompt"], answers, test_set["completion"])
+                rows = asyncio.run(score_test_cases(test_cases, judge, config.geval.max_concurrent))
+                seed_summaries.append(
+                    log_seed_scores(seed["run_id"], test_set, answers, rows, config.geval.judge_model)
+                )
+
+            summary = summarize_seeds(seed_summaries)
+            metrics: list[Metric] = []
+            for key, value in summary.items():
+                metrics.append(Metric(f"{key}_mean", value["mean"], 0, 0))
+                metrics.append(Metric(f"{key}_std", value["std"], 0, 0))
+            client.log_batch(finetune["parent_run_id"], metrics=metrics)
+            client.set_tag(finetune["parent_run_id"], "geval_judge", config.geval.judge_model)
+            summaries[base] = summary
+
+    return {"judge_model": config.geval.judge_model, "bases": summaries}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="G-Eval of the multitask models on the MedText test set.")
-    parser.add_argument("--config", default="configs/gpt2_multitask.yaml")
+    parser.add_argument("overrides", nargs="*", help="Hydra overrides, for example model=qwen3-1.7b")
     args = parser.parse_args()
 
-    summaries = run_geval(load_multitask_config(args.config))
-    print(json.dumps(summaries, indent=2))
+    config: MultitaskConfig = load_multitask_config(args.overrides)
+    outcome: dict[str, Any] = run_geval(config)
+    save_stage_result(config.results_dir, "geval", outcome)
+    print(json.dumps(outcome, indent=2))
 
 
 if __name__ == "__main__":
