@@ -29,7 +29,7 @@ def test_load_pretrain_config_reads_corpus_section() -> None:
     config: PretrainConfig = load_pretrain_config()
 
     assert config.model.model_id == "Qwen/Qwen3-1.7B-Base"
-    assert config.corpus.validation_fraction == 0.01
+    assert config.corpus.validation_fraction == 0.001
     assert config.corpus.remove_boilerplate_sections is True
     assert config.mlflow.registered_model_name == "qwen3-1.7b-pubmed-dapt"
 

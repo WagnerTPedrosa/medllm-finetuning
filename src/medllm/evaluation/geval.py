@@ -45,7 +45,7 @@ from mlflow.entities import Metric
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from medllm.config import GEvalConfig, MultitaskConfig, load_multitask_config
-from medllm.data.multitask import load_multitask
+from medllm.data.finetune_data import load_finetune_data
 from medllm.evaluation.generation import generate_completion
 from medllm.modeling import load_model
 from medllm.reporting.report import load_stage_result, save_stage_result
@@ -354,7 +354,7 @@ def run_geval(config: MultitaskConfig, runs: list[str]) -> dict[str, Any]:
         `bases`, and the score of every answer per run and criterion under `scores`.
     """
     configure_tracking(config)
-    test_set: Dataset = load_multitask(config.multitask.processed_dir)["test_medtext"]
+    test_set: Dataset = load_finetune_data(config.multitask.processed_dir)["test_medtext"]
     if config.geval.num_examples is not None:
         test_set = test_set.select(range(min(config.geval.num_examples, len(test_set))))
     finetunes: dict[str, dict[str, Any]] = {

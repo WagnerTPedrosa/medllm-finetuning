@@ -72,7 +72,7 @@ stages:
         - src/medllm/evaluation/choices.py
         - src/medllm/evaluation/loss.py
         - src/medllm/modeling.py
-        - data/processed/multitask_${item}
+        - data/processed/finetune_${item}
       params:
         - configs/config.yaml:
             - training.eval_batch_size
@@ -95,7 +95,7 @@ stages:
         - src/medllm/evaluation/loss.py
         - src/medllm/modeling.py
         - src/medllm/tracking.py
-        - data/processed/multitask_${item}
+        - data/processed/finetune_${item}
       params:
         - configs/config.yaml:
             - seed
@@ -123,7 +123,7 @@ stages:
         - src/medllm/evaluation/loss.py
         - src/medllm/modeling.py
         - src/medllm/tracking.py
-        - data/processed/multitask_${item}
+        - data/processed/finetune_${item}
         # The pretrained model it starts from
         - results/${item}/pretrain.json
       params:
@@ -148,7 +148,7 @@ stages:
       deps:
         - src/medllm/evaluation/geval.py
         - src/medllm/evaluation/generation.py
-        - data/processed/multitask_${item}
+        - data/processed/finetune_${item}
         - results/${item}/finetune_lora_original.json
       params:
         - configs/config.yaml:
@@ -164,10 +164,10 @@ stages:
     wdir: ../..
     cmd: >-
       uv run python -m medllm.reporting.report --models qwen3-1.7b
-      --data-stats data/processed/multitask_qwen3-1.7b/stats.json
+      --data-stats data/processed/finetune_qwen3-1.7b/stats.json
     deps:
       - src/medllm/reporting/report.py
-      - data/processed/multitask_qwen3-1.7b/stats.json
+      - data/processed/finetune_qwen3-1.7b/stats.json
       - results/qwen3-1.7b/baseline.json
       - results/qwen3-1.7b/finetune_lora_original.json
       - results/qwen3-1.7b/geval.json

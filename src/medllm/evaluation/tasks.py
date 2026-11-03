@@ -14,7 +14,7 @@ from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from medllm.config import MultitaskConfig
 from medllm.data.preprocessing import PUBMEDQA_DECISIONS, SFT_COLUMNS
-from medllm.data.multitask import load_multitask
+from medllm.data.finetune_data import load_finetune_data
 from medllm.evaluation.choices import evaluate_choice_task, evaluate_open_choice_task
 from medllm.evaluation.loss import evaluate
 from medllm.modeling import get_device, load_causal_lm, resolve_model_source
@@ -53,7 +53,7 @@ def evaluate_on_tasks(
     Args:
         model: Model to evaluate.
         tokenizer: Tokenizer matching the model.
-        splits: Splits written by `medllm.data.multitask filter_length`.
+        splits: Splits written by `medllm.data.finetune_data filter_length`.
         config: Multitask configuration.
         prefix: `test` (final results) or `validation` (model selection, sweeps).
 
@@ -85,4 +85,4 @@ def evaluate_model(model_id: str, config: MultitaskConfig, prefix: str = "test")
     source: str = resolve_model_source(model_id)
     model = load_causal_lm(source).to(get_device())
     tokenizer = AutoTokenizer.from_pretrained(source)
-    return evaluate_on_tasks(model, tokenizer, load_multitask(config.multitask.processed_dir), config, prefix)
+    return evaluate_on_tasks(model, tokenizer, load_finetune_data(config.multitask.processed_dir), config, prefix)

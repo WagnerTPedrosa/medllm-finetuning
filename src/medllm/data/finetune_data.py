@@ -3,9 +3,9 @@
 Each step is a stage of pipelines/data/dvc.yaml and writes `<name>.jsonl` files
 and a `stats.json`:
 
-    uv run python -m medllm.data.multitask preprocess       # data/raw -> preprocessed_dir
-    uv run python -m medllm.data.multitask split            # preprocessed_dir -> splits_dir
-    uv run python -m medllm.data.multitask filter_length model=qwen3-1.7b   # -> processed_dir
+    uv run python -m medllm.data.finetune_data preprocess       # data/raw -> preprocessed_dir
+    uv run python -m medllm.data.finetune_data split            # preprocessed_dir -> splits_dir
+    uv run python -m medllm.data.finetune_data filter_length model=qwen3-1.7b   # -> processed_dir
 
 1. preprocess: every source in the shared example format (see
    `medllm.data.preprocessing`); questions that need their options dropped; the
@@ -59,7 +59,7 @@ def save_splits(splits: dict[str, Dataset], output_dir: Path) -> None:
         split.to_json(output_dir / f"{name}.jsonl", lines=True, force_ascii=False)
 
 
-def load_multitask(processed_dir: str | Path) -> DatasetDict:
+def load_finetune_data(processed_dir: str | Path) -> DatasetDict:
     """Load every `<split>.jsonl` file of a step's directory (examples, splits or processed).
 
     Args:
@@ -108,7 +108,7 @@ def run_split(config: MultitaskConfig) -> None:
         print(f"{output_dir} already exists")
         return
 
-    splits: dict[str, Dataset] = split_examples(dict(load_multitask(data.preprocessed_dir)), data, config.seed)
+    splits: dict[str, Dataset] = split_examples(dict(load_finetune_data(data.preprocessed_dir)), data, config.seed)
     stats: dict[str, Any] = {"seed": config.seed, "rows": {name: len(split) for name, split in splits.items()}}
     write_step(splits, stats, output_dir)
 
@@ -125,7 +125,7 @@ def run_filter_length(config: MultitaskConfig) -> None:
     # Lengths are only measured here; this silences the warning for long examples
     tokenizer.model_max_length = 10**9
     filtered, stats = filter_length(
-        dict(load_multitask(data.splits_dir)), tokenizer, config.data_filter.max_seq_len, data.num_proc
+        dict(load_finetune_data(data.splits_dir)), tokenizer, config.data_filter.max_seq_len, data.num_proc
     )
     write_step(filtered, {"tokenizer": config.data_filter.tokenizer, **stats}, output_dir)
 

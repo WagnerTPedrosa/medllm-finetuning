@@ -35,7 +35,7 @@ from trl import SFTConfig, SFTTrainer
 from medllm.config import Hyperparameters, MultitaskConfig, load_multitask_config
 from medllm.data.preprocessing import SFT_COLUMNS
 from medllm.data.mixture import build_mixture
-from medllm.data.multitask import load_multitask
+from medllm.data.finetune_data import load_finetune_data
 from medllm.evaluation.tasks import TaskEvaluation, evaluate_on_tasks
 from medllm.modeling import (
     build_peft_config,
@@ -175,7 +175,7 @@ def train_multitask(
         config: Multitask configuration.
         model_id: Base model (Hub id, path or MLflow URI).
         seed: Random seed.
-        splits: Splits written by `medllm.data.multitask filter_length`.
+        splits: Splits written by `medllm.data.finetune_data filter_length`.
 
     Returns:
         Run id, model directory, number of mixture epochs trained, best validation
@@ -241,7 +241,7 @@ def run_multitask_seeds(config: MultitaskConfig, base: str) -> dict[str, Any]:
     """
     model_id: str = base_model_id(config, base)
     method: str = config.finetune.method
-    splits: DatasetDict = load_multitask(config.multitask.processed_dir)
+    splits: DatasetDict = load_finetune_data(config.multitask.processed_dir)
     configure_tracking(config)
 
     with start_stage_run(

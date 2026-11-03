@@ -38,7 +38,7 @@ from medllm.config import (
 )
 from medllm.data.preprocessing import SFT_COLUMNS
 from medllm.data.mixture import build_mixture
-from medllm.data.multitask import load_multitask
+from medllm.data.finetune_data import load_finetune_data
 from medllm.modeling import (
     build_peft_config,
     free_gpu_memory,
@@ -247,7 +247,7 @@ def run_multitask_sweep(config: MultitaskConfig) -> tuple[dict[str, Any], list[d
         The best completed trial, all trial rows and the Optuna study.
     """
     sweep = config.sweep
-    splits: DatasetDict = load_multitask(config.multitask.processed_dir)
+    splits: DatasetDict = load_finetune_data(config.multitask.processed_dir)
     model_source: str = resolve_model_source(config.model.model_id)
     configure_tracking(config)
     study = optuna.create_study(

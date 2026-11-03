@@ -97,7 +97,7 @@ def test_fine_tuning_data_is_filtered_with_the_model_tokenizer() -> None:
 
     assert qwen.data_filter.tokenizer == qwen.model.model_id
     assert qwen.data_filter.max_seq_len == qwen.model.max_seq_len
-    assert qwen.multitask.processed_dir == "data/processed/multitask_qwen3-1.7b"
+    assert qwen.multitask.processed_dir == "data/processed/finetune_qwen3-1.7b"
     assert qwen.training.max_epochs == qwen.mixture.epochs
 
 
