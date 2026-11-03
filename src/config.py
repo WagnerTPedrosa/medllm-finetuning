@@ -276,6 +276,15 @@ class MultitaskSweepConfig:
 
 
 @dataclass(frozen=True)
+class GEvalConfig:
+    judge_model: str
+    base_url: str
+    max_new_tokens: int
+    max_concurrent: int
+    num_examples: int | None
+
+
+@dataclass(frozen=True)
 class MultitaskConfig:
     seed: int
     mlflow: MLflowConfig
@@ -284,6 +293,7 @@ class MultitaskConfig:
     multitask: MultitaskDataConfig
     finetune: FinetuneConfig
     sweep: MultitaskSweepConfig
+    geval: GEvalConfig
 
 
 def load_multitask_config(path: str | Path) -> MultitaskConfig:
@@ -314,4 +324,5 @@ def load_multitask_config(path: str | Path) -> MultitaskConfig:
         multitask=MultitaskDataConfig(**raw["multitask"]),
         finetune=FinetuneConfig(**raw["finetune"]),
         sweep=MultitaskSweepConfig(**sweep_section),
+        geval=GEvalConfig(**raw["geval"]),
     )

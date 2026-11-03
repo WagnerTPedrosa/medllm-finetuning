@@ -69,3 +69,18 @@ sweep:
   pruner_warmup_evals: 1
   results_path: experiments/multitask_sweep_results.json
   trials_dir: checkpoints/multitask_sweep
+
+# LLM-as-judge (G-Eval) on the generated MedText test answers. The judge runs
+# locally behind vLLM's OpenAI-compatible server:
+#   PATH=~/.local/share/uv/tools/vllm/bin:$PATH vllm serve Qwen/Qwen3.8-27B --port 8000 --max-model-len 8192 --gpu-memory-utilization 0.85 --reasoning-parser qwen3 --max-num-seqs 64
+# (vLLM was installed with `uv tool install vllm`; the PATH entry exposes the
+# `ninja` it needs to compile kernels. 0.85 leaves room on the GPU for the fine-tuned GPT-2 that generates the answers)
+geval:
+  judge_model: Qwen/Qwen3.8-27B
+  base_url: http://localhost:8000/v1
+  # Answers are generated greedily by the fine-tuned model
+  max_new_tokens: 256
+  # Judge requests in flight at once (vLLM batches them)
+  max_concurrent: 32
+  # null scores the whole MedText test set; a number scores the first N (quick checks)
+  num_examples: null
