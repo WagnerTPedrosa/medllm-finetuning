@@ -118,6 +118,8 @@ def build_training_arguments(
         gradient_accumulation_steps=training.gradient_accumulation_steps,
         per_device_eval_batch_size=training.eval_batch_size,
         eval_strategy="steps",
+        # Step 0 is the model before pretraining: the reference for the perplexity drop
+        eval_on_start=True,
         eval_steps=eval_steps,
         save_strategy="steps",
         save_steps=save_steps,

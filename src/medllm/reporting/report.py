@@ -22,6 +22,8 @@ import numpy as np
 
 BASES = ("original", "dapt")
 ZERO_SHOT = "zero-shot"
+# The PubMed-pretrained model before fine-tuning
+ZERO_SHOT_DAPT = "zero-shot_dapt"
 CONFIDENCE_LEVEL = 0.95
 BOOTSTRAP_RESAMPLES = 10_000
 # Resamples drawn at once (bounds the memory of the index matrix)
@@ -150,7 +152,7 @@ def run_row(model: str, run: str, result: dict[str, Any]) -> dict[str, Any]:
 
 
 def comparison_rows(results_root: str | Path, models: list[str]) -> list[dict[str, Any]]:
-    """Zero-shot row, then one row per fine-tuning run, for each base model.
+    """Zero-shot rows (Hub model, then pretrained), then one row per fine-tuning run, for each base model.
 
     Args:
         results_root: Directory with one `results/<model>/` directory per base model.
@@ -170,6 +172,8 @@ def comparison_rows(results_root: str | Path, models: list[str]) -> list[dict[st
 
         if (model_dir / "baseline.json").exists():
             rows.append(run_row(model, ZERO_SHOT, json.loads((model_dir / "baseline.json").read_text())))
+        if (model_dir / "baseline_dapt.json").exists():
+            rows.append(run_row(model, ZERO_SHOT_DAPT, json.loads((model_dir / "baseline_dapt.json").read_text())))
 
         for path in sorted(model_dir.glob("finetune_*.json")):
             run: str = path.stem.removeprefix("finetune_")
@@ -225,8 +229,23 @@ def comparison_markdown(rows: list[dict[str, Any]], majority: dict[str, float]) 
     return "\n".join(lines) + "\n"
 
 
+def paired_lines(row: dict[str, Any], reference: dict[str, Any]) -> list[str]:
+    """One Markdown row per choice task: the accuracy gain of `row` over `reference`, paired by question."""
+    lines: list[str] = []
+    for task, title in CHOICE_TASKS.items():
+        if task not in row["correct"] or task not in reference["correct"]:
+            continue
+        result = paired_bootstrap(reference["correct"][task], row["correct"][task])
+        p_value: str = "<0.001" if result["p_value"] < 0.001 else f"{result['p_value']:.3f}"
+        lines.append(
+            f"| {row['model']} | {row['run']} | {title} | "
+            f"{result['delta']:+.3f} [{result['low']:+.3f}, {result['high']:+.3f}] | {p_value} |"
+        )
+    return lines
+
+
 def paired_comparisons_markdown(rows: list[dict[str, Any]]) -> str:
-    """Markdown table: every fine-tuning run against the zero-shot model of the same base model."""
+    """Markdown table: every other run against the zero-shot Hub model of the same base model."""
     lines: list[str] = [
         "| Model | Run | Task | Δ accuracy vs zero-shot [95% CI] | p-value |",
         "|---|---|---|---|---|",
@@ -236,15 +255,28 @@ def paired_comparisons_markdown(rows: list[dict[str, Any]]) -> str:
         reference = zero_shot.get(row["model"])
         if row["run"] == ZERO_SHOT or reference is None:
             continue
-        for task, title in CHOICE_TASKS.items():
-            if task not in row["correct"] or task not in reference["correct"]:
-                continue
-            result = paired_bootstrap(reference["correct"][task], row["correct"][task])
-            p_value: str = "<0.001" if result["p_value"] < 0.001 else f"{result['p_value']:.3f}"
-            lines.append(
-                f"| {row['model']} | {row['run']} | {title} | "
-                f"{result['delta']:+.3f} [{result['low']:+.3f}, {result['high']:+.3f}] | {p_value} |"
-            )
+        lines.extend(paired_lines(row, reference))
+    return "\n".join(lines) + "\n"
+
+
+def pretraining_comparisons_markdown(rows: list[dict[str, Any]]) -> str:
+    """Markdown table: every run on the pretrained model (`<method>_dapt`) against the same run without pretraining.
+
+    This is the question of the experiment: does the PubMed pretraining make
+    the fine-tuned model better?
+    """
+    lines: list[str] = [
+        "| Model | Run | Task | Δ accuracy vs without pretraining [95% CI] | p-value |",
+        "|---|---|---|---|---|",
+    ]
+    by_run: dict[tuple[str, str], dict[str, Any]] = {(row["model"], row["run"]): row for row in rows}
+    for row in rows:
+        if not row["run"].endswith("_dapt"):
+            continue
+        reference = by_run.get((row["model"], row["run"].removesuffix("_dapt") + "_original"))
+        if reference is None:
+            continue
+        lines.extend(paired_lines(row, reference))
     return "\n".join(lines) + "\n"
 
 
@@ -310,6 +342,7 @@ def main() -> None:
     rows: list[dict[str, Any]] = comparison_rows(args.results_dir, args.models)
     table: str = comparison_markdown(rows, guessing_accuracy(args.data_stats))
     paired: str = paired_comparisons_markdown(rows)
+    pretraining: str = pretraining_comparisons_markdown(rows)
     benchmarks: str = benchmarks_markdown(args.results_dir, args.models)
     general_benchmarks: str = benchmarks_markdown(args.results_dir, args.models, "general_tasks")
     output = Path(args.output)
@@ -318,12 +351,16 @@ def main() -> None:
         "# Model comparison\n\n"
         "Test metrics. Accuracies and G-Eval scores: mean over seeds with a 95% bootstrap "
         "confidence interval over the test questions; other metrics: mean ± std over seeds. "
-        "`zero-shot` is the model without fine-tuning; runs are named `<method>_<start>`, "
+        "`zero-shot` is the model without fine-tuning and `zero-shot_dapt` the PubMed-pretrained one; runs are named `<method>_<start>`, "
         "where `original` starts from the Hub model and `dapt` from the PubMed-pretrained one.\n\n"
         + table
         + "\n## Fine-tuning vs zero-shot\n\n"
         "Paired bootstrap over the same test questions.\n\n"
         + paired
+        + "\n## With vs without PubMed pretraining\n\n"
+        "Each fine-tuning of the pretrained model against the same fine-tuning of the Hub model, "
+        "paired over the same test questions.\n\n"
+        + pretraining
         + "\n## Standard benchmarks\n\n"
         "lm-evaluation-harness, 0-shot, multiple choice with the options shown, in the chat "
         "format: accuracy ± standard error. Comparable with published results. "

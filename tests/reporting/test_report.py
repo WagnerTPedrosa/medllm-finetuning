@@ -11,6 +11,7 @@ from medllm.reporting.report import (
     majority_accuracy,
     paired_bootstrap,
     paired_comparisons_markdown,
+    pretraining_comparisons_markdown,
     save_stage_result,
 )
 
@@ -224,3 +225,27 @@ def test_benchmarks_markdown_skips_results_without_general_tasks(tmp_path: Path)
     save_stage_result(tmp_path / "m", "benchmarks", {"tasks": ["medqa_4options"], "runs": {}})
 
     assert benchmarks_markdown(tmp_path, ["m"], "general_tasks") == ""
+
+
+def test_comparison_rows_puts_the_pretrained_zero_shot_after_the_base_one(tmp_path: Path) -> None:
+    write_run(tmp_path / "m", "baseline", 0.4, [0, 1, 0, 1, 0])
+    write_run(tmp_path / "m", "baseline_dapt", 0.5, [1, 1, 0, 1, 0])
+    write_run(tmp_path / "m", "finetune_lora_original", 0.6, [1, 1, 0, 1, 1])
+
+    rows = comparison_rows(tmp_path, ["m"])
+
+    assert [row["run"] for row in rows] == ["zero-shot", "zero-shot_dapt", "lora_original"]
+
+
+def test_pretraining_comparisons_compare_each_dapt_run_with_its_original_run(tmp_path: Path) -> None:
+    write_run(tmp_path / "m", "baseline", 0.4, [0] * 50)
+    write_run(tmp_path / "m", "baseline_dapt", 0.5, [1] * 50)
+    write_run(tmp_path / "m", "finetune_lora_original", 0.5, [0] * 25 + [1] * 25)
+    write_run(tmp_path / "m", "finetune_lora_dapt", 0.9, [1] * 50)
+
+    table = pretraining_comparisons_markdown(comparison_rows(tmp_path, ["m"]))
+
+    lines = table.splitlines()
+    assert lines[0] == "| Model | Run | Task | Δ accuracy vs without pretraining [95% CI] | p-value |"
+    assert len(lines) == 3
+    assert lines[2].startswith("| m | lora_dapt | MedQA | +0.500 ")

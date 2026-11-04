@@ -59,6 +59,12 @@ def test_build_training_arguments_follows_config(tmp_path: Path) -> None:
     assert args.gradient_checkpointing == training.gradient_checkpointing
 
 
+def test_build_training_arguments_evaluates_the_base_model_before_training(tmp_path: Path) -> None:
+    args = build_training_arguments(load(), tmp_path, max_steps=None)
+
+    assert args.eval_on_start is True
+
+
 def test_build_training_arguments_overrides_max_steps_for_smoke_runs(tmp_path: Path) -> None:
     args = build_training_arguments(load(), tmp_path, max_steps=20)
 

@@ -30,13 +30,16 @@ from lm_eval.tasks import TaskManager
 from mlflow.entities import Metric
 
 from medllm.config import BenchmarksConfig, MultitaskConfig, load_multitask_config
-from medllm.reporting.report import ZERO_SHOT, load_stage_result, save_stage_result
+from medllm.reporting.report import (
+    ZERO_SHOT,
+    ZERO_SHOT_DAPT,
+    load_stage_result,
+    save_stage_result,
+)
 from medllm.tracking import configure_tracking
 from medllm.training.finetune import summarize_seeds
 
 METRIC_PREFIX = "benchmark"
-# The PubMed-pretrained model before fine-tuning
-PRETRAINED_RUN = "zero-shot_dapt"
 # Tasks of this project (pubmedqa_test), next to the harness's own
 TASKS_DIR = Path(__file__).resolve().parent / "lm_eval_tasks"
 
@@ -133,7 +136,7 @@ def run_benchmarks(config: MultitaskConfig, runs: list[str], pretrained: bool = 
     if pretrained:
         pretrain: dict[str, Any] = load_stage_result(config.results_dir, "pretrain")
         metrics: dict[str, float] = benchmark_and_log(client, pretrain["model_dir"], pretrain["run_id"], config)
-        outcome["runs"][PRETRAINED_RUN] = single_model_result(pretrain["run_id"], metrics)
+        outcome["runs"][ZERO_SHOT_DAPT] = single_model_result(pretrain["run_id"], metrics)
 
     for run in runs:
         finetune: dict[str, Any] = load_stage_result(config.results_dir, f"finetune_{run}")
