@@ -51,6 +51,9 @@ stages:
       - src/medllm/data/download.py
       - data/raw
       - data/benchmarks/pubmedqa_test_ground_truth.json
+    params:
+      - configs/config.yaml:
+          - multitask.system_prompt
     outs:
       - data/interim/finetune/preprocessed:
           cache: false

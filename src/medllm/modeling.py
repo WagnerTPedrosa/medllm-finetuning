@@ -6,8 +6,9 @@ from pathlib import Path
 import mlflow
 import torch
 from peft import LoraConfig, PeftModel
-from transformers import AutoModelForCausalLM, PreTrainedModel
+from transformers import AutoModelForCausalLM, PreTrainedModel, PreTrainedTokenizerBase
 
+from medllm.chat import stop_token_ids
 from medllm.config import MultitaskConfig
 
 MLFLOW_URI_PREFIXES = ("models:/", "runs:/")
@@ -48,20 +49,52 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def load_causal_lm(model_id: str) -> PreTrainedModel:
-    """Load a causal language model with float32 weights.
+def weights_dtype(method: str) -> torch.dtype:
+    """Dtype of the base model's weights for a fine-tuning method.
 
-    Transformers loads weights in the dtype they were saved in, which is bf16
-    for most recent Hub models. Training keeps float32 weights and uses bf16
-    only for the computations (mixed precision), so small updates are not lost.
+    LoRA keeps the base weights frozen and trains small adapters (in float32),
+    so the frozen weights can stay in bf16: half the memory, faster steps. Full
+    fine-tuning updates every weight and keeps them in float32, so small
+    updates are not lost (bf16 is used only for the computations).
+
+    Args:
+        method: `lora` or `full`.
+
+    Returns:
+        `torch.bfloat16` for LoRA, `torch.float32` otherwise.
+    """
+    return torch.bfloat16 if method == "lora" else torch.float32
+
+
+def load_causal_lm(model_id: str, dtype: torch.dtype = torch.float32) -> PreTrainedModel:
+    """Load a causal language model with weights in `dtype` (float32 by default).
+
+    Transformers loads weights in the dtype they were saved in (bf16 for most
+    recent Hub models) unless told otherwise, so the dtype is always explicit.
 
     Args:
         model_id: Hub id, local checkpoint directory or MLflow model URI.
+        dtype: Dtype of the weights (see `weights_dtype`).
 
     Returns:
         The model, on the CPU.
     """
-    return AutoModelForCausalLM.from_pretrained(resolve_model_source(model_id), dtype=torch.float32)
+    return AutoModelForCausalLM.from_pretrained(resolve_model_source(model_id), dtype=dtype)
+
+
+def set_end_of_turn(model: PreTrainedModel, tokenizer: PreTrainedTokenizerBase) -> None:
+    """Make generation stop where the model's chat turn ends, and save that with the model.
+
+    The fine-tuned model ends every answer with the chat template's end-of-turn
+    token, not with EOS; vLLM and `generate` read the stop tokens from the
+    model's generation config.
+
+    Args:
+        model: Fine-tuned model (its generation config is changed in place).
+        tokenizer: Its tokenizer.
+    """
+    model.generation_config.eos_token_id = stop_token_ids(tokenizer)
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
 
 
 def load_model(model_id: str) -> tuple[PreTrainedModel, torch.device]:
@@ -97,7 +130,11 @@ def model_label(model_id: str) -> str:
 
 
 def build_peft_config(config: MultitaskConfig) -> LoraConfig | None:
-    """LoRA adapters from `finetune.lora` when `finetune.method` is `lora`, else None."""
+    """LoRA adapters from `finetune.lora` when `finetune.method` is `lora`, else None.
+
+    The modules in `modules_to_save` are trained in full; tied weights (Qwen's
+    embeddings and LM head) stay tied, so the model loads back as trained.
+    """
     if config.finetune.method != "lora":
         return None
     lora = config.finetune.lora
@@ -106,6 +143,8 @@ def build_peft_config(config: MultitaskConfig) -> LoraConfig | None:
         lora_alpha=lora.alpha,
         lora_dropout=lora.dropout,
         target_modules=list(lora.target_modules),
+        modules_to_save=list(lora.modules_to_save),
+        ensure_weight_tying=True,
         bias="none",
         task_type="CAUSAL_LM",
     )

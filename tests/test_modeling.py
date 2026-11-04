@@ -3,7 +3,7 @@ from pathlib import Path
 import mlflow
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model
-from transformers import GPT2Config, GPT2LMHeadModel
+from transformers import AutoTokenizer, GPT2Config, GPT2LMHeadModel
 
 from medllm.config import MultitaskConfig, load_multitask_config
 from medllm.modeling import (
@@ -11,6 +11,8 @@ from medllm.modeling import (
     load_causal_lm,
     merge_lora,
     resolve_model_source,
+    set_end_of_turn,
+    weights_dtype,
 )
 from medllm.tracking import configure_tracking
 
@@ -23,6 +25,32 @@ def test_load_causal_lm_loads_weights_in_float32(tmp_path: Path) -> None:
     model = load_causal_lm(str(tmp_path))
 
     assert next(model.parameters()).dtype == torch.float32
+
+
+def test_load_causal_lm_can_load_bf16_weights_for_lora(tmp_path: Path) -> None:
+    GPT2LMHeadModel(GPT2Config(n_layer=1, n_head=2, n_embd=16)).save_pretrained(tmp_path)
+
+    model = load_causal_lm(str(tmp_path), dtype=weights_dtype("lora"))
+
+    assert next(model.parameters()).dtype == torch.bfloat16
+
+
+def test_weights_dtype_is_bf16_for_lora_and_float32_for_full_fine_tuning() -> None:
+    # LoRA trains small float32 adapters on frozen weights, so the frozen
+    # weights can stay in bf16; full fine-tuning updates them and needs float32
+    assert weights_dtype("lora") == torch.bfloat16
+    assert weights_dtype("full") == torch.float32
+
+
+def test_set_end_of_turn_makes_generation_stop_after_the_answer() -> None:
+    model = GPT2LMHeadModel(GPT2Config(n_layer=1, n_head=2, n_embd=16))
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B-Base")
+
+    set_end_of_turn(model, tokenizer)
+
+    im_end = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    assert model.generation_config.eos_token_id == [im_end, tokenizer.eos_token_id]
+    assert model.generation_config.pad_token_id == tokenizer.pad_token_id
 
 
 def test_resolve_model_source_keeps_hub_ids_and_local_paths() -> None:
@@ -59,6 +87,9 @@ def test_build_peft_config_follows_the_lora_settings() -> None:
     assert peft_config.r == config.finetune.lora.r
     assert peft_config.lora_alpha == config.finetune.lora.alpha
     assert set(peft_config.target_modules) == set(config.finetune.lora.target_modules)
+    # The chat tokens are untrained in the base model: the (tied) embeddings are trained too
+    assert peft_config.modules_to_save == ["embed_tokens"]
+    assert peft_config.ensure_weight_tying
 
 
 def test_build_peft_config_is_none_for_full_fine_tuning() -> None:

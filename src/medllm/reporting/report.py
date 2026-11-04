@@ -263,6 +263,39 @@ def guessing_accuracy(stats_path: str | Path) -> dict[str, float]:
     }
 
 
+def benchmarks_markdown(results_root: str | Path, models: list[str]) -> str:
+    """Table of the lm-evaluation-harness accuracies: mean over seeds ± standard error, and their average.
+
+    Args:
+        results_root: Directory with one results directory per model.
+        models: Models to include (those without `benchmarks.json` are skipped).
+
+    Returns:
+        A Markdown table, or an empty string when no model has benchmark results.
+    """
+    lines: list[str] = []
+    for model in models:
+        path = Path(results_root) / model / "benchmarks.json"
+        if not path.exists():
+            continue
+        benchmarks: dict[str, Any] = json.loads(path.read_text())
+        tasks: list[str] = benchmarks["tasks"]
+        if not lines:
+            lines.append("| Model | Run | " + " | ".join(tasks) + " | Average |")
+            lines.append("|" + "---|" * (len(tasks) + 3))
+        for run, result in benchmarks["runs"].items():
+            seeds: list[dict[str, float]] = [seed["metrics"] for seed in result["seeds"]]
+            accuracies: list[float] = []
+            cells: list[str] = []
+            for task in tasks:
+                accuracy: float = float(np.mean([metrics[f"benchmark_{task}_acc"] for metrics in seeds]))
+                stderr: float = float(np.mean([metrics[f"benchmark_{task}_acc_stderr"] for metrics in seeds]))
+                accuracies.append(accuracy)
+                cells.append(f"{accuracy:.3f} ± {stderr:.3f}")
+            lines.append(f"| {model} | {run} | " + " | ".join(cells) + f" | {np.mean(accuracies):.3f} |")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare the zero-shot and fine-tuned models.")
     parser.add_argument("--models", nargs="+", required=True, help="Directories under --results-dir")
@@ -274,6 +307,7 @@ def main() -> None:
     rows: list[dict[str, Any]] = comparison_rows(args.results_dir, args.models)
     table: str = comparison_markdown(rows, guessing_accuracy(args.data_stats))
     paired: str = paired_comparisons_markdown(rows)
+    benchmarks: str = benchmarks_markdown(args.results_dir, args.models)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -286,6 +320,11 @@ def main() -> None:
         + "\n## Fine-tuning vs zero-shot\n\n"
         "Paired bootstrap over the same test questions.\n\n"
         + paired
+        + "\n## Standard benchmarks\n\n"
+        "lm-evaluation-harness, 0-shot, multiple choice with the options shown, in the chat "
+        "format: accuracy ± standard error. Comparable with published results.\n\n"
+        + (benchmarks or "Not run.")
+        + "\n"
     )
     print(table)
     print(paired)

@@ -44,6 +44,7 @@ from deepeval.test_case import LLMTestCase, SingleTurnParams
 from mlflow.entities import Metric
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
+from medllm.chat import Message, message_text, prompt_text
 from medllm.config import GEvalConfig, MultitaskConfig, load_multitask_config
 from medllm.data.finetune_data import load_finetune_data
 from medllm.evaluation.generation import generate_completion
@@ -294,12 +295,13 @@ def generate_answers(
     return answers
 
 
-def generate_seed_answers(model_dir: str, prompts: list[str], max_new_tokens: int) -> list[str]:
-    """Answers of one fine-tuned model; the model is freed from the GPU afterwards."""
+def generate_seed_answers(model_dir: str, conversations: list[list[Message]], max_new_tokens: int) -> list[str]:
+    """Answers of one fine-tuned model to chat prompts; the model is freed from the GPU afterwards."""
     print(f"Generating answers with {model_dir}")
     model, device = load_model(model_dir)
     model.config.use_cache = True  # load_model turns the cache off for training
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    prompts: list[str] = [prompt_text(tokenizer, messages) for messages in conversations]
     answers: list[str] = generate_answers(model, tokenizer, prompts, device, max_new_tokens)
 
     del model
@@ -310,7 +312,8 @@ def generate_seed_answers(model_dir: str, prompts: list[str], max_new_tokens: in
 
 def log_seed_scores(
     run_id: str,
-    test_set: Dataset,
+    questions: list[str],
+    references: list[str],
     answers: list[str],
     rows: list[dict[str, float | str]],
     judge_model: str,
@@ -325,7 +328,7 @@ def log_seed_scores(
     client.log_batch(run_id, metrics=[Metric(key, value, 0, 0) for key, value in summary.items()])
     client.set_tag(run_id, "geval_judge", judge_model)
     table = pd.DataFrame(
-        {"prompt": test_set["prompt"], "reference": test_set["completion"], "answer": answers}
+        {"question": questions, "reference": references, "answer": answers}
     ).join(pd.DataFrame(rows))
     mlflow.log_table(table, "geval/test_medtext.json", run_id=run_id)
     return summary
@@ -357,6 +360,8 @@ def run_geval(config: MultitaskConfig, runs: list[str]) -> dict[str, Any]:
     test_set: Dataset = load_finetune_data(config.multitask.processed_dir)["test_medtext"]
     if config.geval.num_examples is not None:
         test_set = test_set.select(range(min(config.geval.num_examples, len(test_set))))
+    questions: list[str] = [message_text(messages) for messages in test_set["prompt"]]
+    references: list[str] = [message_text(messages) for messages in test_set["completion"]]
     finetunes: dict[str, dict[str, Any]] = {
         run: load_stage_result(config.results_dir, f"finetune_{run}") for run in runs
     }
@@ -379,11 +384,11 @@ def run_geval(config: MultitaskConfig, runs: list[str]) -> dict[str, Any]:
             for seed in finetune["seeds"]:
                 answers: list[str] = answers_by_run[seed["run_id"]]
                 print(f"Scoring {len(answers)} answers of {run} seed {seed['seed']} with {config.geval.judge_model}")
-                test_cases = build_test_cases(test_set["prompt"], answers, test_set["completion"])
+                test_cases = build_test_cases(questions, answers, references)
                 rows = asyncio.run(score_test_cases(test_cases, judge, config.geval.max_concurrent))
                 seed_rows.append(rows)
                 seed_summaries.append(
-                    log_seed_scores(seed["run_id"], test_set, answers, rows, config.geval.judge_model)
+                    log_seed_scores(seed["run_id"], questions, references, answers, rows, config.geval.judge_model)
                 )
 
             summary = summarize_seeds(seed_summaries)

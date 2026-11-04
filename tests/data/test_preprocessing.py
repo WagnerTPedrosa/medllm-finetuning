@@ -4,13 +4,12 @@ import pandas as pd
 import pytest
 from datasets import Dataset, DatasetDict, Features, Value, concatenate_datasets
 
+from medllm.chat import assistant_reply, chat_prompt
 from medllm.data.preprocessing import (
     EXAMPLE_FEATURES,
-    preprocess,
     clean_examples,
     clean_medmcqa_explanation,
     format_open_completion,
-    format_prompt,
     format_pubmedqa_completion,
     format_pubmedqa_prompt,
     medmcqa_example,
@@ -18,7 +17,9 @@ from medllm.data.preprocessing import (
     medtext_example,
     needs_options,
     open_question,
+    preprocess,
     pubmedqa_example,
+    to_conversation,
     to_examples,
 )
 
@@ -60,10 +61,6 @@ def medqa_rows(count: int) -> Dataset:
     )
 
 
-def test_format_prompt_wraps_question_in_template() -> None:
-    assert format_prompt("Fever?") == "Question:\nFever?\n\nAnswer:\n"
-
-
 def test_format_pubmedqa_prompt_labels_context_sections() -> None:
     prompt = format_pubmedqa_prompt(
         ["Asthma is common.", "We studied 50 children."], ["BACKGROUND", "METHODS"], "Does X help?"
@@ -71,7 +68,7 @@ def test_format_pubmedqa_prompt_labels_context_sections() -> None:
 
     assert prompt == (
         "Context:\nBACKGROUND: Asthma is common.\nMETHODS: We studied 50 children.\n\n"
-        "Question:\nDoes X help?\n\nAnswer (yes, no or maybe):\n"
+        "Question: Does X help?\n\nAnswer yes, no or maybe, then explain."
     )
 
 
@@ -94,7 +91,7 @@ def test_pubmedqa_example_builds_prompt_completion_and_label() -> None:
     assert example["task"] == "pubmedqa"
     assert example["label"] == "maybe"
     assert example["completion"] == "maybe. Because."
-    assert example["prompt"].endswith("Answer (yes, no or maybe):\n")
+    assert example["prompt"].endswith("Answer yes, no or maybe, then explain.")
 
 
 def test_medmcqa_example_asks_the_question_open_ended() -> None:
@@ -103,18 +100,28 @@ def test_medmcqa_example_asks_the_question_open_ended() -> None:
 
     example = medmcqa_example(row)
 
-    assert example["prompt"] == format_prompt("Thinning of cornea occurs in")
+    assert example["prompt"] == "Thinning of cornea occurs in"
     assert example["completion"] == "Keratoconus"
     assert example["label"] == "B"
     assert json.loads(example["options"]) == ["Glaucoma", "Keratoconus", "Uveitis", "Cataract"]
     assert example["task"] == "medmcqa"
 
 
+def test_to_conversation_turns_the_question_and_answer_into_chat_messages() -> None:
+    example = {"prompt": "Fever?", "completion": "Rest.", "task": "medtext", "label": "", "options": ""}
+
+    conversation = to_conversation(example, "Be accurate.")
+
+    assert conversation["prompt"] == chat_prompt("Be accurate.", "Fever?")
+    assert conversation["completion"] == assistant_reply("Rest.")
+    assert conversation["task"] == "medtext"
+
+
 def test_to_examples_uses_the_same_string_type_for_every_source() -> None:
     large = Features({"prompt": Value("large_string"), "completion": Value("large_string")})
     medtext = Dataset.from_dict({"prompt": ["Q?"], "completion": ["A."]}).cast(large)
 
-    examples = to_examples(medtext, medtext_example, num_proc=1)
+    examples = to_examples(medtext, medtext_example, num_proc=1, system_prompt="Be accurate.")
 
     assert examples.features == EXAMPLE_FEATURES
     assert len(concatenate_datasets([examples, examples])) == 2
@@ -235,7 +242,7 @@ def test_medqa_example_asks_the_vignette_open_ended() -> None:
 
     example = medqa_example(row)
 
-    assert example["prompt"] == format_prompt(
+    assert example["prompt"] == (
         "A pregnant woman has burning on urination. What is the best treatment for this patient?"
     )
     assert example["completion"] == "Nitrofurantoin"
@@ -319,7 +326,7 @@ def test_preprocess_converts_each_source_and_keeps_the_official_tests_apart() ->
         "medqa": DatasetDict({"train": medqa_rows(3), "test": medqa_rows(2)}),
     }
 
-    examples, stats = preprocess(raw, test_pmids={"1"}, num_proc=1)
+    examples, stats = preprocess(raw, test_pmids={"1"}, num_proc=1, system_prompt="Be accurate.")
 
     assert {name: len(split) for name, split in examples.items()} == {
         "medtext": 2,
@@ -333,8 +340,8 @@ def test_preprocess_converts_each_source_and_keeps_the_official_tests_apart() ->
     }
     # pubid 1 is the official test question (decision "no")
     assert examples["pubmedqa_test"]["label"] == ["no"]
-    assert examples["medtext"]["prompt"] == [format_prompt("Q1"), format_prompt("Q2")]
-    assert examples["medqa_train"]["completion"] == ["Asthma"] * 3
+    assert examples["medtext"]["prompt"] == [chat_prompt("Be accurate.", "Q1"), chat_prompt("Be accurate.", "Q2")]
+    assert examples["medqa_train"]["completion"] == [assistant_reply("Asthma")] * 3
     assert stats["dropped_needs_options"]["medmcqa_train"] == 1
     assert stats["pubmedqa_artificial_overlap_removed"] == 4
     assert all(split.features == EXAMPLE_FEATURES for split in examples.values())

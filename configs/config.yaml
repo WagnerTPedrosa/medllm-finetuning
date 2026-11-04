@@ -122,6 +122,8 @@ multitask:
   # Held out from MedQA train; the official MedQA test set is the test set
   medqa_validation_size: 150
   num_proc: 16
+  # System message of every training conversation; serve the model with the same one
+  system_prompt: You are a medical assistant. Answer medical questions accurately.
 
 # Training mixture, built from the unique train_*.jsonl examples when fine-tuning starts
 mixture:
@@ -159,6 +161,10 @@ finetune:
     dropout: 0.05
     # Attention and MLP projections (Qwen and Llama names)
     target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+    # Trained in full besides the adapters: the chat tokens (<|im_start|>, <|im_end|>,
+    # <think>) are untrained in base models, and LoRA alone cannot learn to write
+    # <|im_end|>. Qwen ties the embeddings to the LM head, so one matrix is trained.
+    modules_to_save: [embed_tokens]
   output_dir: checkpoints/multitask
   # Model fine-tuned by `--base dapt`: the result of the pretraining stage
   dapt_model_id: models:/${mlflow.pretrain_registered_model}@${pretraining.registry_alias}
@@ -187,6 +193,24 @@ sweep:
 # generated first; then the judge is served by vLLM (started and stopped by the
 # stage, unless a server is already listening at base_url). vLLM is installed
 # apart from the project with `uv tool install vllm`.
+# Standard medical benchmarks (lm-evaluation-harness), comparable with published
+# results: multiple choice with the options shown, 0-shot, in the chat format the
+# models are trained on (with `multitask.system_prompt`)
+benchmarks:
+  tasks:
+    - medqa_4options
+    - medmcqa
+    # The harness's pubmedqa task, read from a source `datasets` can still load
+    - pubmedqa_test
+    - mmlu_anatomy
+    - mmlu_clinical_knowledge
+    - mmlu_college_biology
+    - mmlu_college_medicine
+    - mmlu_medical_genetics
+    - mmlu_professional_medicine
+  num_fewshot: 0
+  batch_size: 16
+
 geval:
   judge_model: Qwen/Qwen3.8-27B
   base_url: http://localhost:8000/v1

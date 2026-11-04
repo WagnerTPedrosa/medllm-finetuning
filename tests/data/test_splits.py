@@ -2,6 +2,7 @@ from dataclasses import replace
 
 from datasets import Dataset, DatasetDict, concatenate_datasets
 
+from medllm.chat import assistant_reply, chat_prompt
 from medllm.config import MultitaskConfig, load_multitask_config
 from medllm.data.splits import (
     filter_length,
@@ -99,23 +100,37 @@ def test_split_examples_holds_out_validation_sets_and_keeps_the_tests() -> None:
 
 
 class WordTokenizer:
-    """One token per word."""
+    """One token per word; the chat template joins the messages and adds an end marker."""
+
+    def apply_chat_template(self, messages: list[dict[str, str]], tokenize: bool) -> str:
+        return " ".join(message["content"] for message in messages) + " <end>"
 
     def __call__(self, texts: list[str], add_special_tokens: bool) -> dict[str, list[list[int]]]:
         return {"input_ids": [[0] * len(text.split()) for text in texts]}
 
 
+def chat_rows(task: str, count: int, labels: list[str]) -> Dataset:
+    return Dataset.from_dict(
+        {
+            "prompt": [chat_prompt("S", f"{task} {i}") for i in range(count)],
+            "completion": [assistant_reply("x")] * count,
+            "task": [task] * count,
+            "label": [labels[i % len(labels)] for i in range(count)],
+        }
+    )
+
+
 def test_filter_length_drops_examples_longer_than_the_context_and_joins_the_validation_sets() -> None:
     splits = {
-        f"{prefix}_{task}": task_rows(task, 2, ["A"])
+        f"{prefix}_{task}": chat_rows(task, 2, ["A"])
         for prefix in ("train", "validation", "test")
         for task in ("medtext", "pubmedqa", "medmcqa", "medqa")
     }
     splits["train_medqa"] = concatenate_datasets(
-        [splits["train_medqa"], task_rows("a very long medqa question", 1, ["A"])]
+        [splits["train_medqa"], chat_rows("a very long medqa question", 1, ["A"])]
     )
 
-    # "medqa 0" + "x" + EOS = 4 tokens; the long question has 7
+    # "S medqa 0 x <end>" = 5 tokens; the long question has 9
     filtered, stats = filter_length(splits, WordTokenizer(), max_seq_len=5, num_proc=1)  # type: ignore[arg-type]
 
     assert len(filtered["train_medqa"]) == 2

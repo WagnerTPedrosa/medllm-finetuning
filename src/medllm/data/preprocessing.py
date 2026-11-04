@@ -5,10 +5,12 @@ completion is the text of the correct option (with the cleaned explanation for
 MedMCQA). Questions that only make sense with the options ("All of the
 following except", "Which is true about") are left out.
 
-Every example has `prompt`, `completion`, `task`, `label` (the gold decision for
-PubMedQA, the letter of the correct option for MedMCQA and MedQA, empty for
-MedText) and `options` (JSON list of the option texts, used to score the open
-questions as multiple choice; empty for the other tasks).
+Every example is a conversation in TRL's prompt-completion format: `prompt`
+holds the system prompt and the user's question, `completion` the assistant's
+answer (chat messages, see `medllm.chat`). It also has `task`, `label` (the
+gold decision for PubMedQA, the letter of the correct option for MedMCQA and
+MedQA, empty for MedText) and `options` (JSON list of the option texts, used to
+score the open questions as multiple choice; empty for the other tasks).
 """
 
 import json
@@ -19,14 +21,22 @@ from typing import Any
 import pandas as pd
 from datasets import Dataset, DatasetDict, Features, Value
 
-PROMPT_TEMPLATE = "Question:\n{question}\n\nAnswer:\n"
-
+from medllm.chat import assistant_reply, chat_prompt
 
 EXAMPLE_COLUMNS = ["prompt", "completion", "task", "label", "options"]
 
 
+MESSAGES = [{"role": Value("string"), "content": Value("string")}]
 # One schema for every source, so splits from different datasets can be concatenated
-EXAMPLE_FEATURES = Features({column: Value("string") for column in EXAMPLE_COLUMNS})
+EXAMPLE_FEATURES = Features(
+    {
+        "prompt": MESSAGES,
+        "completion": MESSAGES,
+        "task": Value("string"),
+        "label": Value("string"),
+        "options": Value("string"),
+    }
+)
 
 
 OPTION_LETTERS = "ABCD"
@@ -101,28 +111,18 @@ ANSWER_REFERS_TO_OPTIONS = re.compile(
 MIN_EXPLANATION_WORDS = 3
 
 
+# One example before it becomes a conversation: `prompt` is the user's question
+# and `completion` the answer, as plain text
 Example = dict[str, str]
 
 
-def format_prompt(question: str) -> str:
-    """Wrap a question in the Question/Answer template the model is trained on.
-
-    Args:
-        question: Raw question text.
-
-    Returns:
-        The prompt the model receives before generating the answer.
-    """
-    return PROMPT_TEMPLATE.format(question=question)
-
-
 def format_pubmedqa_prompt(contexts: list[str], labels: list[str], question: str) -> str:
-    """Prompt with the abstract sections (labelled, e.g. `METHODS: ...`) and the question."""
+    """The user's message: the abstract sections (labelled, e.g. `METHODS: ...`) and the question."""
     lines: list[str] = [
         f"{label}: {text}" if label else text for label, text in zip(labels, contexts)
     ]
     context: str = "\n".join(lines)
-    return f"Context:\n{context}\n\nQuestion:\n{question}\n\nAnswer (yes, no or maybe):\n"
+    return f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer yes, no or maybe, then explain."
 
 
 def format_pubmedqa_completion(decision: str, long_answer: str) -> str:
@@ -245,7 +245,7 @@ def clean_examples(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
 def medtext_example(row: dict[str, Any]) -> Example:
     """MedText row (`prompt`, `completion`) in the shared format (for `Dataset.map`)."""
     return {
-        "prompt": format_prompt(row["prompt"]),
+        "prompt": row["prompt"],
         "completion": row["completion"],
         "task": "medtext",
         "label": "",
@@ -275,7 +275,7 @@ def medmcqa_example(row: dict[str, Any]) -> Example:
     options: list[str] = medmcqa_options(row)
     answer: str = options[int(row["cop"])]
     return {
-        "prompt": format_prompt(open_question(row["question"])),
+        "prompt": open_question(row["question"]),
         "completion": format_open_completion(answer, clean_medmcqa_explanation(row["exp"], answer)),
         "task": "medmcqa",
         "label": OPTION_LETTERS[int(row["cop"])],
@@ -288,7 +288,7 @@ def medqa_example(row: dict[str, Any]) -> Example:
     options: list[str] = [row["options"][letter] for letter in OPTION_LETTERS]
     letter: str = row["answer_idx"]
     return {
-        "prompt": format_prompt(open_question(row["question"])),
+        "prompt": open_question(row["question"]),
         "completion": row["options"][letter],
         "task": "medqa",
         "label": letter,
@@ -306,12 +306,38 @@ def medqa_is_open(row: dict[str, Any]) -> bool:
     return not needs_options(open_question(row["question"]), row["options"][row["answer_idx"]])
 
 
+def to_conversation(example: Example, system_prompt: str) -> dict[str, Any]:
+    """Turn a plain question and answer into chat messages, keeping the other fields.
+
+    Args:
+        example: `prompt` (the user's question) and `completion` (the answer), as text.
+        system_prompt: System message put before every question.
+
+    Returns:
+        The example with `prompt` as system and user messages and `completion`
+        as the assistant's message.
+    """
+    return {
+        **example,
+        "prompt": chat_prompt(system_prompt, example["prompt"]),
+        "completion": assistant_reply(example["completion"]),
+    }
+
+
+def conversation_example(
+    row: dict[str, Any], example_fn: Callable[[dict[str, Any]], Example], system_prompt: str
+) -> dict[str, Any]:
+    """One raw row as a conversation (for `Dataset.map`)."""
+    return to_conversation(example_fn(row), system_prompt)
+
+
 def to_examples(
-    dataset: Dataset, example_fn: Callable[[dict[str, Any]], Example], num_proc: int
+    dataset: Dataset, example_fn: Callable[[dict[str, Any]], Example], num_proc: int, system_prompt: str
 ) -> Dataset:
-    """Map rows to the shared example format, dropping every other column."""
+    """Map rows to conversations in the shared example format, dropping every other column."""
     return dataset.map(
-        example_fn,
+        conversation_example,
+        fn_kwargs={"example_fn": example_fn, "system_prompt": system_prompt},
         remove_columns=dataset.column_names,
         features=EXAMPLE_FEATURES,
         num_proc=num_proc,
@@ -324,7 +350,7 @@ def outside_pmids(pmids: list[int], excluded: set[str]) -> list[bool]:
 
 
 def preprocess(
-    raw: dict[str, DatasetDict], test_pmids: set[str], num_proc: int
+    raw: dict[str, DatasetDict], test_pmids: set[str], num_proc: int, system_prompt: str
 ) -> tuple[dict[str, Dataset], dict[str, Any]]:
     """Convert every raw source to the shared example format.
 
@@ -338,6 +364,7 @@ def preprocess(
             `pubmedqa_artificial`, `medmcqa`, `medqa`).
         test_pmids: PMIDs of the official PubMedQA test set.
         num_proc: Processes for `map` and `filter`.
+        system_prompt: System message of every conversation.
 
     Returns:
         Examples by name (`medtext`, `pubmedqa_train`, `pubmedqa_test`,
@@ -373,14 +400,14 @@ def preprocess(
         dropped_needs_options[name] = len(rows) - len(open_questions[name])
 
     examples: dict[str, Dataset] = {
-        "medtext": to_examples(medtext, medtext_example, num_proc),
-        "pubmedqa_train": to_examples(labeled.select(train_indices), pubmedqa_example, num_proc),
-        "pubmedqa_test": to_examples(labeled.select(test_indices), pubmedqa_example, num_proc),
-        "pubmedqa_artificial": to_examples(artificial, pubmedqa_example, num_proc),
-        "medmcqa_train": to_examples(open_questions["medmcqa_train"], medmcqa_example, num_proc),
-        "medmcqa_test": to_examples(open_questions["medmcqa_test"], medmcqa_example, num_proc),
-        "medqa_train": to_examples(open_questions["medqa_train"], medqa_example, num_proc),
-        "medqa_test": to_examples(open_questions["medqa_test"], medqa_example, num_proc),
+        "medtext": to_examples(medtext, medtext_example, num_proc, system_prompt),
+        "pubmedqa_train": to_examples(labeled.select(train_indices), pubmedqa_example, num_proc, system_prompt),
+        "pubmedqa_test": to_examples(labeled.select(test_indices), pubmedqa_example, num_proc, system_prompt),
+        "pubmedqa_artificial": to_examples(artificial, pubmedqa_example, num_proc, system_prompt),
+        "medmcqa_train": to_examples(open_questions["medmcqa_train"], medmcqa_example, num_proc, system_prompt),
+        "medmcqa_test": to_examples(open_questions["medmcqa_test"], medmcqa_example, num_proc, system_prompt),
+        "medqa_train": to_examples(open_questions["medqa_train"], medqa_example, num_proc, system_prompt),
+        "medqa_test": to_examples(open_questions["medqa_test"], medqa_example, num_proc, system_prompt),
     }
     stats: dict[str, Any] = {
         "rows": {name: len(dataset) for name, dataset in examples.items()},

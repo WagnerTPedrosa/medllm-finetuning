@@ -117,11 +117,13 @@ def split_examples(
     }
 
 
-def token_lengths(batch: dict[str, list[str]], tokenizer: PreTrainedTokenizerBase) -> dict[str, list[int]]:
-    """Tokens per example: prompt + completion + EOS (for `Dataset.map`)."""
-    prompts = tokenizer(batch["prompt"], add_special_tokens=False)["input_ids"]
-    completions = tokenizer(batch["completion"], add_special_tokens=False)["input_ids"]
-    return {"n_tokens": [len(p) + len(c) + 1 for p, c in zip(prompts, completions)]}
+def token_lengths(batch: dict[str, list[Any]], tokenizer: PreTrainedTokenizerBase) -> dict[str, list[int]]:
+    """Tokens per conversation, chat template included, as the trainer tokenizes it (for `Dataset.map`)."""
+    texts: list[str] = [
+        tokenizer.apply_chat_template(prompt + completion, tokenize=False)
+        for prompt, completion in zip(batch["prompt"], batch["completion"])
+    ]
+    return {"n_tokens": [len(ids) for ids in tokenizer(texts, add_special_tokens=False)["input_ids"]]}
 
 
 def fits_context(n_tokens: list[int], max_seq_len: int) -> list[bool]:

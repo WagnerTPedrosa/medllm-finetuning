@@ -3,6 +3,7 @@
 #   evaluate_zero_shot@<model>       the base model before fine-tuning -> results/<model>/baseline.json
 #   finetune_lora_original@<model>   LoRA on the Hub model -> results/<model>/finetune_lora_original.json
 #   judge_geval@<model>              LLM-as-judge on the MedText answers -> results/<model>/geval.json
+#   evaluate_benchmarks@<model>      lm-evaluation-harness (MedQA, MedMCQA, PubMedQA, MMLU medical) -> results/<model>/benchmarks.json
 #   report                           comparison tables -> reports/comparison.md
 #   pretrain@, finetune_lora_dapt@   the PubMed branch (frozen)
 # Pipeline v2, Qwen3-1.7B on MedText, PubMedQA, MedMCQA and MedQA
@@ -144,7 +145,7 @@ stages:
     foreach: ${models}
     do:
       wdir: ../..
-      cmd: uv run python -m medllm.evaluation.geval --runs lora_original model=${item}
+      cmd: uv run python -m medllm.evaluation.geval model=${item} --runs lora_original
       deps:
         - src/medllm/evaluation/geval.py
         - src/medllm/evaluation/generation.py
@@ -159,6 +160,24 @@ stages:
         - results/${item}/geval.json:
             cache: false
 
+  evaluate_benchmarks:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.evaluation.benchmarks model=${item} --runs lora_original
+      deps:
+        - src/medllm/evaluation/benchmarks.py
+        - src/medllm/evaluation/lm_eval_tasks
+        - results/${item}/baseline.json
+        - results/${item}/finetune_lora_original.json
+      params:
+        - configs/config.yaml:
+            - benchmarks
+            - multitask.system_prompt
+      metrics:
+        - results/${item}/benchmarks.json:
+            cache: false
+
   report:
     # One base model for now; list every model under --models when there are more
     wdir: ../..
@@ -171,6 +190,7 @@ stages:
       - results/qwen3-1.7b/baseline.json
       - results/qwen3-1.7b/finetune_lora_original.json
       - results/qwen3-1.7b/geval.json
+      - results/qwen3-1.7b/benchmarks.json
     outs:
       - reports/comparison.md:
           cache: false

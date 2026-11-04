@@ -4,3 +4,6 @@
 
 # Hugging Face datasets write cache files next to the data they read; they are not part of it
 cache-*.arrow
+
+# Python bytecode next to the code DVC tracks as a directory
+__pycache__

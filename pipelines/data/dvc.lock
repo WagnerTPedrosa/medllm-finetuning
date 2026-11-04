@@ -1,12 +1,12 @@
 schema: '2.0'
 stages:
   download:
-    cmd: uv run python -m src.download
+    cmd: uv run python -m medllm.data.download
     deps:
-    - path: src/download.py
+    - path: src/medllm/data/download.py
       hash: md5
-      md5: 766eb3878c766effe6e2d90313999edf
-      size: 3215
+      md5: b96111d1c632ba68af7682d74e27a4a1
+      size: 3226
     params:
       configs/config.yaml:
         datasets:
@@ -69,21 +69,21 @@ stages:
       size: 512800604
       nfiles: 9
   split:
-    cmd: uv run python -m src.multitask split
+    cmd: uv run python -m medllm.data.finetune_data split
     deps:
-    - path: data/interim/multitask/examples
+    - path: data/interim/finetune/preprocessed
       hash: md5
-      md5: bb94d8c7f9e218aef4f5b4eff8678fee.dir
-      size: 512800604
+      md5: 4a7c55f2f71b6bf0df26aa8591ce74a3.dir
+      size: 567898281
       nfiles: 9
-    - path: src/dataset_preparation.py
+    - path: src/medllm/data/finetune_data.py
       hash: md5
-      md5: 49d09b723c29d83133c9f56c4fa72c4a
-      size: 6794
-    - path: src/multitask.py
+      md5: 418aabb372c00aa5513c2dd715cde6d2
+      size: 6278
+    - path: src/medllm/data/splits.py
       hash: md5
-      md5: 96a2fe9ea35569758674b6d8352a6e50
-      size: 29071
+      md5: bd09bebf13d28fe07852729081122eb3
+      size: 7204
     params:
       configs/config.yaml:
         multitask.medmcqa_validation_size: 150
@@ -92,30 +92,69 @@ stages:
         multitask.pubmedqa_validation_size: 50
         seed: 42
     outs:
-    - path: data/interim/multitask/splits
+    - path: data/interim/finetune/splits
       hash: md5
-      md5: d4ad331469594c9beaa833e0331cdcf5.dir
-      size: 512800498
+      md5: a2cd6dc172d5aa58e83d08f24bf5c250.dir
+      size: 567898175
       nfiles: 14
   filter_length@qwen3-1.7b:
-    cmd: uv run python -m src.multitask filter_length model=qwen3-1.7b
+    cmd: uv run python -m medllm.data.finetune_data filter_length 
+      model=qwen3-1.7b
     deps:
-    - path: data/interim/multitask/splits
+    - path: data/interim/finetune/splits
       hash: md5
-      md5: d4ad331469594c9beaa833e0331cdcf5.dir
-      size: 512800498
+      md5: a2cd6dc172d5aa58e83d08f24bf5c250.dir
+      size: 567898175
       nfiles: 14
-    - path: src/multitask.py
+    - path: src/medllm/data/finetune_data.py
       hash: md5
-      md5: 96a2fe9ea35569758674b6d8352a6e50
-      size: 29071
+      md5: 418aabb372c00aa5513c2dd715cde6d2
+      size: 6278
+    - path: src/medllm/data/splits.py
+      hash: md5
+      md5: bd09bebf13d28fe07852729081122eb3
+      size: 7204
     params:
       configs/model/qwen3-1.7b.yaml:
         model.max_seq_len: 2048
         model.model_id: Qwen/Qwen3-1.7B-Base
     outs:
-    - path: data/processed/multitask_qwen3-1.7b
+    - path: data/processed/finetune_qwen3-1.7b
       hash: md5
-      md5: 083f87c517a42661014fda7e897a1dda.dir
-      size: 513090632
+      md5: c125756b0e859b981827356775578dc4.dir
+      size: 568233509
       nfiles: 15
+  preprocess:
+    cmd: uv run python -m medllm.data.finetune_data preprocess
+    deps:
+    - path: data/benchmarks/pubmedqa_test_ground_truth.json
+      hash: md5
+      md5: f52c9d953b2833b43486fb1c00f1737f
+      size: 11414
+    - path: data/raw
+      hash: md5
+      md5: 30258837c226aca07659cff19f48a848.dir
+      size: 505185087
+      nfiles: 9
+    - path: src/medllm/data/download.py
+      hash: md5
+      md5: b96111d1c632ba68af7682d74e27a4a1
+      size: 3226
+    - path: src/medllm/data/finetune_data.py
+      hash: md5
+      md5: 418aabb372c00aa5513c2dd715cde6d2
+      size: 6278
+    - path: src/medllm/data/preprocessing.py
+      hash: md5
+      md5: 5a0518d1c92a8e08f1005226dc7cf4b4
+      size: 16597
+    params:
+      configs/config.yaml:
+        multitask.system_prompt: You are a medical assistant. Answer medical 
+          questions accurately.
+    outs:
+    - path: data/interim/finetune/preprocessed
+      hash: md5
+      md5: 4a7c55f2f71b6bf0df26aa8591ce74a3.dir
+      size: 567898281
+      nfiles: 9

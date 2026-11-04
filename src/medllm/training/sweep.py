@@ -36,14 +36,15 @@ from medllm.config import (
     SearchSpace,
     load_multitask_config,
 )
-from medllm.data.preprocessing import SFT_COLUMNS
-from medllm.data.mixture import build_mixture
 from medllm.data.finetune_data import load_finetune_data
+from medllm.data.mixture import build_mixture
+from medllm.data.preprocessing import SFT_COLUMNS
 from medllm.modeling import (
     build_peft_config,
     free_gpu_memory,
     load_causal_lm,
     resolve_model_source,
+    weights_dtype,
 )
 from medllm.tracking import configure_tracking, start_stage_run
 from medllm.training.finetune import (
@@ -202,7 +203,7 @@ def sweep_objective(
     ) as run:
         trial.set_user_attr("mlflow_run_id", run.info.run_id)
         trainer = SFTTrainer(
-            model=load_causal_lm(model_source),
+            model=load_causal_lm(model_source, weights_dtype(config.finetune.method)),
             args=build_multitask_sft_config(
                 config, trial_dir, config.seed, eval_steps, hyperparameters, save_models=False
             ),

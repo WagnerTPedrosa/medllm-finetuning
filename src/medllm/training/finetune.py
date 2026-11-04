@@ -33,9 +33,9 @@ from transformers import AutoTokenizer, EarlyStoppingCallback, PreTrainedModel
 from trl import SFTConfig, SFTTrainer
 
 from medllm.config import Hyperparameters, MultitaskConfig, load_multitask_config
-from medllm.data.preprocessing import SFT_COLUMNS
-from medllm.data.mixture import build_mixture
 from medllm.data.finetune_data import load_finetune_data
+from medllm.data.mixture import build_mixture
+from medllm.data.preprocessing import SFT_COLUMNS
 from medllm.evaluation.tasks import TaskEvaluation, evaluate_on_tasks
 from medllm.modeling import (
     build_peft_config,
@@ -43,6 +43,8 @@ from medllm.modeling import (
     merge_lora,
     model_label,
     resolve_model_source,
+    set_end_of_turn,
+    weights_dtype,
 )
 from medllm.reporting.report import BASES, save_stage_result
 from medllm.tracking import configure_tracking, log_best_model, start_stage_run
@@ -197,7 +199,7 @@ def train_multitask(
     ) as run:
         mlflow.log_params({"examples_per_epoch": examples_per_epoch, "epoch_steps": epoch_steps})
         trainer = SFTTrainer(
-            model=load_causal_lm(source),
+            model=load_causal_lm(source, weights_dtype(method)),
             args=build_multitask_sft_config(config, output_dir, seed, epoch_steps),
             train_dataset=train_set.select_columns(SFT_COLUMNS),
             eval_dataset={name: splits[f"validation_{name}"].select_columns(SFT_COLUMNS) for name in VALIDATION_SETS},
@@ -210,6 +212,7 @@ def train_multitask(
         curves: dict[str, list[float]] = epoch_metrics(trainer.state.log_history, list(VALIDATION_SETS))
         best_dir: Path = output_dir / "best"
         model: PreTrainedModel = merge_lora(trainer.model)
+        set_end_of_turn(model, trainer.processing_class)
         model.save_pretrained(str(best_dir))
         trainer.processing_class.save_pretrained(str(best_dir))
         evaluation: TaskEvaluation = evaluate_on_tasks(model, trainer.processing_class, splits, config, "test")

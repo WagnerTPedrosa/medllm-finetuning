@@ -226,6 +226,7 @@ class MultitaskDataConfig:
     medmcqa_validation_size: int
     medqa_validation_size: int
     num_proc: int
+    system_prompt: str
 
 
 @dataclass(frozen=True)
@@ -254,6 +255,7 @@ class LoraSettings:
     alpha: int
     dropout: float
     target_modules: list[str]
+    modules_to_save: list[str]
 
 
 @dataclass(frozen=True)
@@ -294,6 +296,15 @@ class GEvalConfig:
 
 
 @dataclass(frozen=True)
+class BenchmarksConfig:
+    """lm-evaluation-harness tasks and how they are run."""
+
+    tasks: list[str]
+    num_fewshot: int
+    batch_size: int
+
+
+@dataclass(frozen=True)
 class MultitaskConfig:
     seed: int
     mlflow: MLflowConfig
@@ -305,6 +316,7 @@ class MultitaskConfig:
     mixture: MixtureConfig
     finetune: FinetuneConfig
     sweep: MultitaskSweepConfig
+    benchmarks: BenchmarksConfig
     geval: GEvalConfig
     results_dir: str
 
@@ -351,6 +363,7 @@ def load_multitask_config(overrides: list[str] | None = None) -> MultitaskConfig
         mixture=MixtureConfig(**raw["mixture"]),
         finetune=FinetuneConfig(**finetune_section),
         sweep=MultitaskSweepConfig(**sweep_section),
+        benchmarks=BenchmarksConfig(**raw["benchmarks"]),
         geval=GEvalConfig(**geval_section),
         results_dir=raw["results_dir"],
     )

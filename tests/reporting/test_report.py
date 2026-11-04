@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from medllm.reporting.report import (
+    benchmarks_markdown,
     bootstrap_ci,
     comparison_markdown,
     comparison_rows,
@@ -150,3 +151,39 @@ def test_paired_comparisons_markdown_compares_each_run_with_zero_shot() -> None:
 
     assert "| m | lora_original | MedQA | +0.500 [" in table
     assert "<0.001" in table
+
+
+def benchmark_seed(medqa: float, pubmedqa: float) -> dict[str, dict[str, float]]:
+    return {
+        "metrics": {
+            "benchmark_medqa_4options_acc": medqa,
+            "benchmark_medqa_4options_acc_stderr": 0.01,
+            "benchmark_pubmedqa_test_acc": pubmedqa,
+            "benchmark_pubmedqa_test_acc_stderr": 0.02,
+        }
+    }
+
+
+def test_benchmarks_markdown_shows_accuracy_with_standard_error_and_the_average(tmp_path: Path) -> None:
+    save_stage_result(
+        tmp_path / "m",
+        "benchmarks",
+        {
+            "tasks": ["medqa_4options", "pubmedqa_test"],
+            "runs": {
+                "zero-shot": {"seeds": [benchmark_seed(0.4, 0.6)]},
+                "lora_original": {"seeds": [benchmark_seed(0.5, 0.7)]},
+            },
+        },
+    )
+
+    table = benchmarks_markdown(tmp_path, ["m"])
+
+    lines = table.splitlines()
+    assert lines[0] == "| Model | Run | medqa_4options | pubmedqa_test | Average |"
+    assert lines[2] == "| m | zero-shot | 0.400 ± 0.010 | 0.600 ± 0.020 | 0.500 |"
+    assert lines[3] == "| m | lora_original | 0.500 ± 0.010 | 0.700 ± 0.020 | 0.600 |"
+
+
+def test_benchmarks_markdown_is_empty_without_results(tmp_path: Path) -> None:
+    assert benchmarks_markdown(tmp_path, ["m"]) == ""

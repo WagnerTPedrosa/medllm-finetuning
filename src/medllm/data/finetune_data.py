@@ -96,7 +96,7 @@ def run_preprocess(config: MultitaskConfig) -> None:
     raw_dir = Path(config.datasets.raw_dir)
     raw: dict[str, DatasetDict] = {name: load_raw(raw_dir / name) for name in config.datasets.sources}
     test_pmids: set[str] = set(json.loads(Path(data.pubmedqa_test_ground_truth).read_text()))
-    examples, stats = preprocess(raw, test_pmids, data.num_proc)
+    examples, stats = preprocess(raw, test_pmids, data.num_proc, data.system_prompt)
     write_step(examples, stats, output_dir)
 
 

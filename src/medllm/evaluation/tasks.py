@@ -7,14 +7,16 @@ for the confidence intervals of the report.
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 from datasets import Dataset, DatasetDict
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
+from medllm.chat import prompt_text
 from medllm.config import MultitaskConfig
-from medllm.data.preprocessing import PUBMEDQA_DECISIONS, SFT_COLUMNS
 from medllm.data.finetune_data import load_finetune_data
+from medllm.data.preprocessing import PUBMEDQA_DECISIONS, SFT_COLUMNS
 from medllm.evaluation.choices import evaluate_choice_task, evaluate_open_choice_task
 from medllm.evaluation.loss import evaluate
 from medllm.modeling import get_device, load_causal_lm, resolve_model_source
@@ -39,6 +41,11 @@ class TaskEvaluation:
 def correctness(predictions: list[str], labels: list[str]) -> list[int]:
     """1 where the prediction equals the gold label, else 0."""
     return [int(prediction == label) for prediction, label in zip(predictions, labels)]
+
+
+def render_prompt(example: dict[str, Any], tokenizer: PreTrainedTokenizerBase) -> dict[str, str]:
+    """The example's chat prompt as the text the model continues (for `Dataset.map`)."""
+    return {"prompt": prompt_text(tokenizer, example["prompt"])}
 
 
 def evaluate_on_tasks(
@@ -68,7 +75,7 @@ def evaluate_on_tasks(
     # Scoring computes log-probabilities over the whole vocabulary: small batches keep memory low
     batch_size: int = config.training.eval_batch_size
     for task in (*FIXED_CHOICE_TASKS, *OPEN_CHOICE_TASKS):
-        dataset: Dataset = splits[f"{prefix}_{task}"]
+        dataset: Dataset = splits[f"{prefix}_{task}"].map(render_prompt, fn_kwargs={"tokenizer": tokenizer})
         if task in FIXED_CHOICE_TASKS:
             choices: list[str] = list(FIXED_CHOICE_TASKS[task])
             result = evaluate_choice_task(model, tokenizer, dataset, choices, device, batch_size=batch_size)
