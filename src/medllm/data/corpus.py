@@ -11,7 +11,8 @@ The documents are saved as Parquet (`train.parquet`, `validation.parquet`):
 compressed, which matters at hundreds of thousands of full papers.
 
 tokenize, into `corpus.processed_dir`:
-4. Tokenize, append EOS to every document and pack into fixed-size blocks.
+4. Shuffle the documents, tokenize, append EOS to every document and pack
+   into fixed-size blocks.
 
 Each step writes a `stats.json` (what it removed or produced).
 """
@@ -291,20 +292,25 @@ def clean_corpus_documents(
 
 
 def pack_corpus(
-    splits: DatasetDict, tokenizer: PreTrainedTokenizerBase, block_size: int, num_proc: int
+    splits: DatasetDict, tokenizer: PreTrainedTokenizerBase, block_size: int, num_proc: int, seed: int
 ) -> tuple[DatasetDict, dict[str, Any]]:
-    """Tokenize the documents and pack them into blocks of `block_size` tokens.
+    """Shuffle the documents, tokenize them and pack them into blocks of `block_size` tokens.
+
+    The shards are ordered by MeSH stratum; shuffling first makes the documents
+    that share a block unrelated, as in the pretraining of OLMo. (The training
+    blocks are shuffled again by the Trainer.)
 
     Args:
         splits: `train` and `validation` documents with a `text` column.
         tokenizer: Tokenizer of the base model.
         block_size: Tokens per block (the model's context window).
         num_proc: Processes for `map`.
+        seed: Random seed of the document order.
 
     Returns:
         The packed blocks (`input_ids`) and the token and block counts per split.
     """
-    tokenized: DatasetDict = splits.map(
+    tokenized: DatasetDict = splits.shuffle(seed=seed).map(
         tokenize_documents,
         batched=True,
         num_proc=num_proc,
@@ -368,7 +374,7 @@ def run_tokenize_corpus(config: PretrainConfig) -> None:
     tokenizer = AutoTokenizer.from_pretrained(config.model.model_id)
     # Documents are packed into blocks later; the per-document length warning does not apply
     tokenizer.model_max_length = 10**9
-    packed, stats = pack_corpus(splits, tokenizer, config.model.max_seq_len, corpus.num_proc)
+    packed, stats = pack_corpus(splits, tokenizer, config.model.max_seq_len, corpus.num_proc, config.seed)
 
     stats = {"clean_dir": corpus.clean_dir, "tokenizer": config.model.model_id, "block_size": config.model.max_seq_len, **stats}
     packed.save_to_disk(str(output_dir))

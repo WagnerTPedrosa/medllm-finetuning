@@ -122,6 +122,9 @@ stages:
         - src/medllm/data/corpus.py
         - data/interim/pubmed
       params:
+        # Order of the documents before packing
+        - configs/config.yaml:
+            - seed
         - configs/model/${item}.yaml:
             - model.model_id
             - model.max_seq_len

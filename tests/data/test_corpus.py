@@ -158,8 +158,23 @@ def test_pack_corpus_tokenizes_and_packs_each_split() -> None:
         {"train": Dataset.from_dict({"text": ["aa b", "ccc"]}), "validation": Dataset.from_dict({"text": ["d"]})}
     )
 
-    packed, stats = pack_corpus(splits, FakeTokenizer(), block_size=2, num_proc=1)  # type: ignore[arg-type]
+    packed, stats = pack_corpus(splits, FakeTokenizer(), block_size=2, num_proc=1, seed=0)  # type: ignore[arg-type]
 
-    assert packed["train"]["input_ids"] == [[2, 1], [0, 3]]
+    # "aa b" -> [2, 1, EOS] and "ccc" -> [3, EOS], in either order
+    assert sorted(packed["train"]["input_ids"]) in ([[0, 3], [2, 1]], [[2, 1], [3, 0]])
     assert stats["tokens"] == {"train": 5, "validation": 2}
     assert stats["blocks"] == {"train": 2, "validation": 1}
+
+
+def test_pack_corpus_shuffles_the_documents_before_packing() -> None:
+    # Every document is one word of a different length: one block [length, EOS] per document
+    texts = ["a" * length for length in range(1, 21)]
+    splits = DatasetDict({"train": Dataset.from_dict({"text": texts}), "validation": Dataset.from_dict({"text": ["d"]})})
+
+    packed, _ = pack_corpus(splits, FakeTokenizer(), block_size=2, num_proc=1, seed=0)  # type: ignore[arg-type]
+    again, _ = pack_corpus(splits, FakeTokenizer(), block_size=2, num_proc=1, seed=0)  # type: ignore[arg-type]
+
+    lengths = [block[0] for block in packed["train"]["input_ids"]]
+    assert lengths != list(range(1, 21))
+    assert sorted(lengths) == list(range(1, 21))
+    assert again["train"]["input_ids"] == packed["train"]["input_ids"]
