@@ -158,3 +158,49 @@ stages:
       md5: 4a7c55f2f71b6bf0df26aa8591ce74a3.dir
       size: 567898281
       nfiles: 9
+  clean_corpus:
+    cmd: uv run python -m medllm.data.corpus clean
+    deps:
+    - path: src/medllm/data/corpus.py
+      hash: md5
+      md5: 40d4c8e23a69152ddb155e2bd70e675a
+      size: 15477
+    params:
+      configs/config.yaml:
+        corpus.benchmark_dataset_id: qiaojin/PubMedQA
+        corpus.benchmark_subset: pqa_labeled
+        corpus.raw_dir: ~/Documents/Projects/pubmed-corpus
+        corpus.remove_boilerplate_sections: true
+        corpus.remove_citations: true
+        corpus.validation_fraction: 0.001
+        seed: 42
+    outs:
+    - path: data/interim/pubmed
+      hash: md5
+      md5: 269c4ca75ed01140b1c8c5d78b81687a.dir
+      size: 13504401592
+      nfiles: 4
+  tokenize_corpus@qwen3-1.7b:
+    cmd: uv run python -m medllm.data.corpus tokenize model=qwen3-1.7b
+    deps:
+    - path: data/interim/pubmed
+      hash: md5
+      md5: 269c4ca75ed01140b1c8c5d78b81687a.dir
+      size: 13504401592
+      nfiles: 4
+    - path: src/medllm/data/corpus.py
+      hash: md5
+      md5: 40d4c8e23a69152ddb155e2bd70e675a
+      size: 15477
+    params:
+      configs/config.yaml:
+        seed: 42
+      configs/model/qwen3-1.7b.yaml:
+        model.max_seq_len: 2048
+        model.model_id: Qwen/Qwen3-1.7B-Base
+    outs:
+    - path: data/processed/pubmed_qwen3-1.7b
+      hash: md5
+      md5: 900dae823333742d86b3c3368dca0574.dir
+      size: 24595461350
+      nfiles: 57
