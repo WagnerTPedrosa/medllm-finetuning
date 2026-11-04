@@ -7,8 +7,9 @@ Scores the base model (zero-shot), the PubMed-pretrained model before
 fine-tuning (`--pretrained`) and every seed of the given fine-tuning runs on
 `benchmarks.tasks` (MedQA, MedMCQA and PubMedQA as multiple choice with the
 options shown, and the medical subjects of MMLU) and on
-`benchmarks.general_tasks` (MMLU, ARC, HellaSwag), which show whether the
-medical training costs general knowledge. Unlike `medllm.evaluation.tasks`,
+`benchmarks.general_tasks` (MMLU, ARC, HellaSwag) and
+`benchmarks.perplexity_tasks` (WikiText word perplexity), which show whether
+the medical training costs general knowledge. Unlike `medllm.evaluation.tasks`,
 which asks the questions open-ended, these are the standard formats, so the
 numbers can be compared with other models. Every model is asked in the chat
 format it is trained on (system prompt, thinking off).
@@ -44,14 +45,23 @@ METRIC_PREFIX = "benchmark"
 TASKS_DIR = Path(__file__).resolve().parent / "lm_eval_tasks"
 
 
-def harness_model_args(model_path: str) -> dict[str, Any]:
-    """Arguments of the harness's Hugging Face model: bf16 weights, thinking off (as in training)."""
-    return {"pretrained": model_path, "dtype": "bfloat16", "enable_thinking": False}
+def harness_model_args(model_path: str, max_length: int) -> dict[str, Any]:
+    """Arguments of the harness's Hugging Face model: bf16 weights, thinking off and the context of training.
+
+    Args:
+        model_path: Hub id or local directory of the model.
+        max_length: Longest input in tokens (the models are trained on this
+            context; perplexity tasks are scored in windows of this length).
+
+    Returns:
+        The `model_args` of `lm_eval.simple_evaluate`.
+    """
+    return {"pretrained": model_path, "dtype": "bfloat16", "enable_thinking": False, "max_length": max_length}
 
 
 def benchmark_tasks(benchmarks: BenchmarksConfig) -> list[str]:
-    """Every task to run: the medical ones, then the general ones."""
-    return list(benchmarks.tasks) + list(benchmarks.general_tasks)
+    """Every task to run: the medical ones, the general ones, then the perplexity ones."""
+    return list(benchmarks.tasks) + list(benchmarks.general_tasks) + list(benchmarks.perplexity_tasks)
 
 
 def benchmark_metrics(results: dict[str, Any], tasks: list[str]) -> dict[str, float]:
@@ -77,12 +87,33 @@ def benchmark_metrics(results: dict[str, Any], tasks: list[str]) -> dict[str, fl
     return metrics
 
 
+def perplexity_metrics(results: dict[str, Any], tasks: list[str]) -> dict[str, float]:
+    """Word perplexity per language-modelling task, from `simple_evaluate`'s output.
+
+    Args:
+        results: Output of `lm_eval.simple_evaluate`.
+        tasks: Perplexity tasks to keep.
+
+    Returns:
+        `benchmark_<task>_word_perplexity` for every task.
+
+    Raises:
+        KeyError: If a task has no results.
+    """
+    metrics: dict[str, float] = {}
+    for task in tasks:
+        if task not in results["results"]:
+            raise KeyError(f"No benchmark results for {task}")
+        metrics[f"{METRIC_PREFIX}_{task}_word_perplexity"] = float(results["results"][task]["word_perplexity,none"])
+    return metrics
+
+
 def benchmark_model(model_path: str, config: MultitaskConfig) -> dict[str, float]:
     """Run every benchmark task on one model; the model is freed from the GPU afterwards."""
     print(f"Benchmarking {model_path}")
     results: dict[str, Any] = simple_evaluate(
         model="hf",
-        model_args=harness_model_args(model_path),
+        model_args=harness_model_args(model_path, config.model.max_seq_len),
         tasks=benchmark_tasks(config.benchmarks),
         num_fewshot=config.benchmarks.num_fewshot,
         batch_size=config.benchmarks.batch_size,
@@ -90,7 +121,11 @@ def benchmark_model(model_path: str, config: MultitaskConfig) -> dict[str, float
         system_instruction=config.finetune_data.system_prompt,
         task_manager=TaskManager(include_path=str(TASKS_DIR)),
     )
-    metrics: dict[str, float] = benchmark_metrics(results, benchmark_tasks(config.benchmarks))
+    accuracy_tasks: list[str] = list(config.benchmarks.tasks) + list(config.benchmarks.general_tasks)
+    metrics: dict[str, float] = {
+        **benchmark_metrics(results, accuracy_tasks),
+        **perplexity_metrics(results, list(config.benchmarks.perplexity_tasks)),
+    }
     gc.collect()
     torch.cuda.empty_cache()
     return metrics
@@ -129,6 +164,7 @@ def run_benchmarks(config: MultitaskConfig, runs: list[str], pretrained: bool = 
     outcome: dict[str, Any] = {
         "tasks": list(config.benchmarks.tasks),
         "general_tasks": list(config.benchmarks.general_tasks),
+        "perplexity_tasks": list(config.benchmarks.perplexity_tasks),
         "num_fewshot": config.benchmarks.num_fewshot,
         "runs": {ZERO_SHOT: single_model_result(baseline["run_id"], zero_shot)},
     }

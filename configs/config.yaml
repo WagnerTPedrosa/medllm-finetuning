@@ -63,6 +63,10 @@ pretraining:
   weight_decay: 0.1
   max_grad_norm: 1.0
   num_train_epochs: 1.0
+  # Training-token budget (null: the whole corpus). The cosine schedule decays
+  # over the budget, and the Trainer shuffles the blocks, so a budget trains on
+  # a random part of the corpus
+  max_tokens: null
   # About 0.5M tokens per optimizer step: batch x accumulation x max_seq_len
   per_device_batch_size: ???
   gradient_accumulation_steps: ???
@@ -215,6 +219,10 @@ benchmarks:
     - mmlu
     - arc_challenge
     - hellaswag
+  # Word perplexity on Wikipedia text (lower is better): forgetting of plain
+  # language, which accuracies can miss. Scored on raw text, without the chat format
+  perplexity_tasks:
+    - wikitext
   num_fewshot: 0
   batch_size: 16
 

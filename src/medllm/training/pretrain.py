@@ -82,6 +82,33 @@ class PerplexityCallback(TrainerCallback):
         )
 
 
+def tokens_per_step(config: PretrainConfig) -> int:
+    """Training tokens in one optimizer step: batch x accumulation x block length."""
+    training = config.pretraining
+    return training.per_device_batch_size * training.gradient_accumulation_steps * config.model.max_seq_len
+
+
+def token_budget_steps(config: PretrainConfig) -> int | None:
+    """Optimizer steps that fit in `pretraining.max_tokens` (whole steps only).
+
+    Args:
+        config: Pretraining configuration.
+
+    Returns:
+        The number of steps, or None when there is no budget (the whole corpus).
+
+    Raises:
+        ValueError: If the budget is smaller than one optimizer step.
+    """
+    max_tokens: int | None = config.pretraining.max_tokens
+    if max_tokens is None:
+        return None
+    steps: int = max_tokens // tokens_per_step(config)
+    if steps < 1:
+        raise ValueError(f"pretraining.max_tokens={max_tokens} is smaller than one step ({tokens_per_step(config)} tokens)")
+    return steps
+
+
 def build_training_arguments(
     config: PretrainConfig, output_dir: Path, max_steps: int | None
 ) -> TrainingArguments:
@@ -91,7 +118,8 @@ def build_training_arguments(
         config: Pretraining configuration.
         output_dir: Directory for checkpoints.
         max_steps: Stop after this many optimizer steps (smoke tests); None
-            trains for `num_train_epochs`.
+            trains for `pretraining.max_tokens`, or `num_train_epochs` when
+            there is no token budget.
 
     Returns:
         The training arguments (bf16, step-based evaluation and checkpoints,
@@ -103,6 +131,7 @@ def build_training_arguments(
     if max_steps is not None:
         eval_steps = min(eval_steps, max_steps)
         save_steps = min(save_steps, max_steps)
+    training_steps: int | None = max_steps if max_steps is not None else token_budget_steps(config)
 
     return TrainingArguments(
         output_dir=str(output_dir),
@@ -113,7 +142,7 @@ def build_training_arguments(
         weight_decay=training.weight_decay,
         max_grad_norm=training.max_grad_norm,
         num_train_epochs=training.num_train_epochs,
-        max_steps=max_steps if max_steps is not None else -1,
+        max_steps=training_steps if training_steps is not None else -1,
         per_device_train_batch_size=training.per_device_batch_size,
         gradient_accumulation_steps=training.gradient_accumulation_steps,
         per_device_eval_batch_size=training.eval_batch_size,
@@ -220,9 +249,7 @@ def run_pretraining(
                     "corpus_dir": config.corpus.processed_dir,
                     "train_blocks": len(train_blocks),
                     "validation_blocks": len(validation_blocks),
-                    "tokens_per_step": training.per_device_batch_size
-                    * training.gradient_accumulation_steps
-                    * config.model.max_seq_len,
+                    "tokens_per_step": tokens_per_step(config),
                 }
             )
 

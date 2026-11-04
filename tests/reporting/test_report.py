@@ -11,6 +11,7 @@ from medllm.reporting.report import (
     majority_accuracy,
     paired_bootstrap,
     paired_comparisons_markdown,
+    perplexity_markdown,
     pretraining_comparisons_markdown,
     save_stage_result,
 )
@@ -249,3 +250,34 @@ def test_pretraining_comparisons_compare_each_dapt_run_with_its_original_run(tmp
     assert lines[0] == "| Model | Run | Task | Δ accuracy vs without pretraining [95% CI] | p-value |"
     assert len(lines) == 3
     assert lines[2].startswith("| m | lora_dapt | MedQA | +0.500 ")
+
+
+def test_perplexity_markdown_shows_the_mean_word_perplexity_over_seeds(tmp_path: Path) -> None:
+    save_stage_result(
+        tmp_path / "m",
+        "benchmarks",
+        {
+            "perplexity_tasks": ["wikitext"],
+            "runs": {
+                "zero-shot": {"seeds": [{"metrics": {"benchmark_wikitext_word_perplexity": 12.0}}]},
+                "lora_original": {
+                    "seeds": [
+                        {"metrics": {"benchmark_wikitext_word_perplexity": 13.0}},
+                        {"metrics": {"benchmark_wikitext_word_perplexity": 14.0}},
+                    ]
+                },
+            },
+        },
+    )
+
+    table = perplexity_markdown(tmp_path, ["m"])
+
+    assert table.splitlines()[0] == "| Model | Run | wikitext |"
+    assert "| m | zero-shot | 12.00 |" in table
+    assert "| m | lora_original | 13.50 |" in table
+
+
+def test_perplexity_markdown_is_empty_without_perplexity_tasks(tmp_path: Path) -> None:
+    save_stage_result(tmp_path / "m", "benchmarks", {"tasks": ["medqa_4options"], "runs": {}})
+
+    assert perplexity_markdown(tmp_path, ["m"]) == ""

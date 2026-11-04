@@ -6,6 +6,7 @@ from medllm.evaluation.benchmarks import (
     benchmark_metrics,
     benchmark_tasks,
     harness_model_args,
+    perplexity_metrics,
 )
 from medllm.evaluation.lm_eval_tasks.pubmedqa_test import doc_to_text, official_test
 
@@ -34,10 +35,26 @@ def test_benchmark_metrics_names_a_missing_task() -> None:
         benchmark_metrics({"results": {}}, ["medmcqa"])
 
 
-def test_harness_model_args_turn_thinking_off_like_the_rest_of_the_evaluation() -> None:
-    args = harness_model_args("checkpoints/best")
+def test_harness_model_args_turn_thinking_off_and_keep_the_training_context() -> None:
+    args = harness_model_args("checkpoints/best", 2048)
 
-    assert args == {"pretrained": "checkpoints/best", "dtype": "bfloat16", "enable_thinking": False}
+    assert args == {
+        "pretrained": "checkpoints/best",
+        "dtype": "bfloat16",
+        "enable_thinking": False,
+        "max_length": 2048,
+    }
+
+
+def test_perplexity_metrics_keeps_the_word_perplexity_per_task() -> None:
+    results = {"results": {"wikitext": {"word_perplexity,none": 12.5, "byte_perplexity,none": 1.6}}}
+
+    assert perplexity_metrics(results, ["wikitext"]) == {"benchmark_wikitext_word_perplexity": 12.5}
+
+
+def test_perplexity_metrics_names_a_missing_task() -> None:
+    with pytest.raises(KeyError, match="wikitext"):
+        perplexity_metrics({"results": {}}, ["wikitext"])
 
 
 def test_pubmedqa_test_keeps_the_official_test_questions() -> None:
@@ -71,4 +88,12 @@ def test_benchmark_tasks_runs_the_medical_and_the_general_tasks() -> None:
 
     tasks = benchmark_tasks(config.benchmarks)
 
-    assert tasks == list(config.benchmarks.tasks) + list(config.benchmarks.general_tasks)
+    assert tasks == (
+        list(config.benchmarks.tasks)
+        + list(config.benchmarks.general_tasks)
+        + list(config.benchmarks.perplexity_tasks)
+    )
+
+
+def test_benchmarks_config_measures_forgetting_as_wikitext_perplexity() -> None:
+    assert load_multitask_config().benchmarks.perplexity_tasks == ["wikitext"]

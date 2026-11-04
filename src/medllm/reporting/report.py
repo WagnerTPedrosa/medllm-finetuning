@@ -331,6 +331,38 @@ def benchmarks_markdown(results_root: str | Path, models: list[str], group: str 
     return "\n".join(lines)
 
 
+def perplexity_markdown(results_root: str | Path, models: list[str]) -> str:
+    """Table of the lm-evaluation-harness word perplexities: mean over seeds (lower is better).
+
+    Args:
+        results_root: Directory with one results directory per model.
+        models: Models to include (those without perplexity tasks are skipped).
+
+    Returns:
+        A Markdown table, or an empty string when no model has perplexity results.
+    """
+    lines: list[str] = []
+    for model in models:
+        path = Path(results_root) / model / "benchmarks.json"
+        if not path.exists():
+            continue
+        benchmarks: dict[str, Any] = json.loads(path.read_text())
+        if "perplexity_tasks" not in benchmarks:
+            continue
+        tasks: list[str] = benchmarks["perplexity_tasks"]
+        if not lines:
+            lines.append("| Model | Run | " + " | ".join(tasks) + " |")
+            lines.append("|" + "---|" * (len(tasks) + 2))
+        for run, result in benchmarks["runs"].items():
+            seeds: list[dict[str, float]] = [seed["metrics"] for seed in result["seeds"]]
+            cells: list[str] = []
+            for task in tasks:
+                perplexity: float = float(np.mean([metrics[f"benchmark_{task}_word_perplexity"] for metrics in seeds]))
+                cells.append(f"{perplexity:.2f}")
+            lines.append(f"| {model} | {run} | " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare the zero-shot and fine-tuned models.")
     parser.add_argument("--models", nargs="+", required=True, help="Directories under --results-dir")
@@ -345,6 +377,7 @@ def main() -> None:
     pretraining: str = pretraining_comparisons_markdown(rows)
     benchmarks: str = benchmarks_markdown(args.results_dir, args.models)
     general_benchmarks: str = benchmarks_markdown(args.results_dir, args.models, "general_tasks")
+    perplexities: str = perplexity_markdown(args.results_dir, args.models)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -370,6 +403,10 @@ def main() -> None:
         "The same, on general tasks: a drop from `zero-shot` means the medical training "
         "made the model forget general knowledge.\n\n"
         + (general_benchmarks or "Not run.")
+        + "\n\nWord perplexity on WikiText (raw Wikipedia text, windows of the training "
+        "context; lower is better): a rise from `zero-shot` means the model lost some of "
+        "its plain language modelling.\n\n"
+        + (perplexities or "Not run.")
         + "\n"
     )
     print(table)

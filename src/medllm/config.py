@@ -98,6 +98,8 @@ class PretrainingConfig:
     dataloader_num_workers: int
     registry_alias: str
     gradient_checkpointing: bool
+    # Stop after this many training tokens (None: the whole corpus, one epoch)
+    max_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -302,6 +304,8 @@ class BenchmarksConfig:
     tasks: list[str]
     # General knowledge, to see whether the PubMed pretraining costs it (forgetting)
     general_tasks: list[str]
+    # Language-modelling tasks scored by perplexity (forgetting of plain text)
+    perplexity_tasks: list[str]
     num_fewshot: int
     batch_size: int
 
