@@ -2,7 +2,11 @@ import pytest
 from datasets import Dataset
 
 from medllm.config import load_multitask_config
-from medllm.evaluation.benchmarks import benchmark_metrics, harness_model_args
+from medllm.evaluation.benchmarks import (
+    benchmark_metrics,
+    benchmark_tasks,
+    harness_model_args,
+)
 from medllm.evaluation.lm_eval_tasks.pubmedqa_test import doc_to_text, official_test
 
 
@@ -54,3 +58,17 @@ def test_benchmarks_config_lists_the_medical_tasks() -> None:
     assert "medqa_4options" in benchmarks.tasks
     assert "mmlu_professional_medicine" in benchmarks.tasks
     assert benchmarks.num_fewshot == 0
+
+
+def test_benchmarks_config_lists_general_tasks_to_measure_forgetting() -> None:
+    benchmarks = load_multitask_config().benchmarks
+
+    assert benchmarks.general_tasks == ["mmlu", "arc_challenge", "hellaswag"]
+
+
+def test_benchmark_tasks_runs_the_medical_and_the_general_tasks() -> None:
+    config = load_multitask_config()
+
+    tasks = benchmark_tasks(config.benchmarks)
+
+    assert tasks == list(config.benchmarks.tasks) + list(config.benchmarks.general_tasks)

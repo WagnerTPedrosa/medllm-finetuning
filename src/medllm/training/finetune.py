@@ -71,7 +71,7 @@ def default_hyperparameters(config: MultitaskConfig) -> Hyperparameters:
     }
 
 
-def build_multitask_sft_config(
+def build_sft_config(
     config: MultitaskConfig,
     output_dir: Path,
     seed: int,
@@ -200,7 +200,7 @@ def train_multitask(
         mlflow.log_params({"examples_per_epoch": examples_per_epoch, "epoch_steps": epoch_steps})
         trainer = SFTTrainer(
             model=load_causal_lm(source, weights_dtype(method)),
-            args=build_multitask_sft_config(config, output_dir, seed, epoch_steps),
+            args=build_sft_config(config, output_dir, seed, epoch_steps),
             train_dataset=train_set.select_columns(SFT_COLUMNS),
             eval_dataset={name: splits[f"validation_{name}"].select_columns(SFT_COLUMNS) for name in VALIDATION_SETS},
             processing_class=AutoTokenizer.from_pretrained(source),
@@ -244,7 +244,7 @@ def run_multitask_seeds(config: MultitaskConfig, base: str) -> dict[str, Any]:
     """
     model_id: str = base_model_id(config, base)
     method: str = config.finetune.method
-    splits: DatasetDict = load_finetune_data(config.multitask.processed_dir)
+    splits: DatasetDict = load_finetune_data(config.finetune_data.processed_dir)
     configure_tracking(config)
 
     with start_stage_run(
@@ -254,7 +254,7 @@ def run_multitask_seeds(config: MultitaskConfig, base: str) -> dict[str, Any]:
         {"task": "multitask", "base_model": model_id, "finetune_base": base, "finetune_method": method},
     ) as parent:
         mlflow.log_dict(asdict(config), "config.json")
-        mlflow.log_artifact(str(Path(config.multitask.processed_dir) / "stats.json"), "data")
+        mlflow.log_artifact(str(Path(config.finetune_data.processed_dir) / "stats.json"), "data")
         results: list[dict[str, Any]] = [
             train_multitask(config, model_id, seed, splits) for seed in config.finetune.seeds
         ]

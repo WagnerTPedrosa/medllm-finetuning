@@ -1,10 +1,14 @@
 """Standard medical benchmarks with the lm-evaluation-harness, comparable with published results.
 
-    uv run python -m medllm.evaluation.benchmarks --runs lora_original model=qwen3-1.7b
+    uv run python -m medllm.evaluation.benchmarks model=qwen3-1.7b --runs lora_original
+    uv run python -m medllm.evaluation.benchmarks model=qwen3-1.7b --runs lora_original lora_dapt --pretrained
 
-Scores the base model (zero-shot) and every seed of the given fine-tuning runs
-on `benchmarks.tasks` (MedQA, MedMCQA and PubMedQA as multiple choice with the
-options shown, and the medical subjects of MMLU). Unlike `medllm.evaluation.tasks`,
+Scores the base model (zero-shot), the PubMed-pretrained model before
+fine-tuning (`--pretrained`) and every seed of the given fine-tuning runs on
+`benchmarks.tasks` (MedQA, MedMCQA and PubMedQA as multiple choice with the
+options shown, and the medical subjects of MMLU) and on
+`benchmarks.general_tasks` (MMLU, ARC, HellaSwag), which show whether the
+medical training costs general knowledge. Unlike `medllm.evaluation.tasks`,
 which asks the questions open-ended, these are the standard formats, so the
 numbers can be compared with other models. Every model is asked in the chat
 format it is trained on (system prompt, thinking off).
@@ -25,12 +29,14 @@ from lm_eval import simple_evaluate
 from lm_eval.tasks import TaskManager
 from mlflow.entities import Metric
 
-from medllm.config import MultitaskConfig, load_multitask_config
+from medllm.config import BenchmarksConfig, MultitaskConfig, load_multitask_config
 from medllm.reporting.report import ZERO_SHOT, load_stage_result, save_stage_result
 from medllm.tracking import configure_tracking
 from medllm.training.finetune import summarize_seeds
 
 METRIC_PREFIX = "benchmark"
+# The PubMed-pretrained model before fine-tuning
+PRETRAINED_RUN = "zero-shot_dapt"
 # Tasks of this project (pubmedqa_test), next to the harness's own
 TASKS_DIR = Path(__file__).resolve().parent / "lm_eval_tasks"
 
@@ -38,6 +44,11 @@ TASKS_DIR = Path(__file__).resolve().parent / "lm_eval_tasks"
 def harness_model_args(model_path: str) -> dict[str, Any]:
     """Arguments of the harness's Hugging Face model: bf16 weights, thinking off (as in training)."""
     return {"pretrained": model_path, "dtype": "bfloat16", "enable_thinking": False}
+
+
+def benchmark_tasks(benchmarks: BenchmarksConfig) -> list[str]:
+    """Every task to run: the medical ones, then the general ones."""
+    return list(benchmarks.tasks) + list(benchmarks.general_tasks)
 
 
 def benchmark_metrics(results: dict[str, Any], tasks: list[str]) -> dict[str, float]:
@@ -69,53 +80,66 @@ def benchmark_model(model_path: str, config: MultitaskConfig) -> dict[str, float
     results: dict[str, Any] = simple_evaluate(
         model="hf",
         model_args=harness_model_args(model_path),
-        tasks=list(config.benchmarks.tasks),
+        tasks=benchmark_tasks(config.benchmarks),
         num_fewshot=config.benchmarks.num_fewshot,
         batch_size=config.benchmarks.batch_size,
         apply_chat_template=True,
-        system_instruction=config.multitask.system_prompt,
+        system_instruction=config.finetune_data.system_prompt,
         task_manager=TaskManager(include_path=str(TASKS_DIR)),
     )
-    metrics: dict[str, float] = benchmark_metrics(results, list(config.benchmarks.tasks))
+    metrics: dict[str, float] = benchmark_metrics(results, benchmark_tasks(config.benchmarks))
     gc.collect()
     torch.cuda.empty_cache()
     return metrics
 
 
-def run_benchmarks(config: MultitaskConfig, runs: list[str]) -> dict[str, Any]:
-    """Benchmark the base model and every seed of the given fine-tuning runs.
+def benchmark_and_log(client: mlflow.MlflowClient, model_path: str, run_id: str, config: MultitaskConfig) -> dict[str, float]:
+    """Benchmark one model and log its metrics to its MLflow run."""
+    metrics: dict[str, float] = benchmark_model(model_path, config)
+    client.log_batch(run_id, metrics=[Metric(key, value, 0, 0) for key, value in metrics.items()])
+    return metrics
+
+
+def single_model_result(run_id: str, metrics: dict[str, float]) -> dict[str, Any]:
+    """Benchmark result of a model that is not fine-tuned (one seed)."""
+    return {"seeds": [{"run_id": run_id, "metrics": metrics}], "summary": summarize_seeds([metrics])}
+
+
+def run_benchmarks(config: MultitaskConfig, runs: list[str], pretrained: bool = False) -> dict[str, Any]:
+    """Benchmark the base model, optionally the pretrained one, and every seed of the given fine-tuning runs.
 
     Args:
         config: Multitask configuration (see the `benchmarks` section).
         runs: Fine-tuning results to benchmark, by the suffix of their file
             (`lora_original` for `results/<model>/finetune_lora_original.json`).
+        pretrained: Also benchmark the PubMed-pretrained model before
+            fine-tuning (`results/<model>/pretrain.json`), as `zero-shot_dapt`.
 
     Returns:
-        The tasks, and per run (`zero-shot` first) the metrics of every seed
-        and their mean and standard deviation.
+        The medical and general tasks, and per run (`zero-shot` first) the
+        metrics of every seed and their mean and standard deviation.
     """
     configure_tracking(config)
     client = mlflow.MlflowClient()
     baseline: dict[str, Any] = load_stage_result(config.results_dir, "baseline")
-    zero_shot: dict[str, float] = benchmark_model(config.model.model_id, config)
-    client.log_batch(baseline["run_id"], metrics=[Metric(key, value, 0, 0) for key, value in zero_shot.items()])
+    zero_shot: dict[str, float] = benchmark_and_log(client, config.model.model_id, baseline["run_id"], config)
     outcome: dict[str, Any] = {
         "tasks": list(config.benchmarks.tasks),
+        "general_tasks": list(config.benchmarks.general_tasks),
         "num_fewshot": config.benchmarks.num_fewshot,
-        "runs": {
-            ZERO_SHOT: {
-                "seeds": [{"run_id": baseline["run_id"], "metrics": zero_shot}],
-                "summary": summarize_seeds([zero_shot]),
-            }
-        },
+        "runs": {ZERO_SHOT: single_model_result(baseline["run_id"], zero_shot)},
     }
+
+    if pretrained:
+        pretrain: dict[str, Any] = load_stage_result(config.results_dir, "pretrain")
+        metrics: dict[str, float] = benchmark_and_log(client, pretrain["model_dir"], pretrain["run_id"], config)
+        outcome["runs"][PRETRAINED_RUN] = single_model_result(pretrain["run_id"], metrics)
 
     for run in runs:
         finetune: dict[str, Any] = load_stage_result(config.results_dir, f"finetune_{run}")
         seeds: list[dict[str, Any]] = []
         for seed in finetune["seeds"]:
-            metrics: dict[str, float] = benchmark_model(seed["model_dir"], config)
-            client.log_batch(seed["run_id"], metrics=[Metric(key, value, 0, 0) for key, value in metrics.items()])
+            metrics = benchmark_and_log(client, seed["model_dir"], seed["run_id"], config)
             seeds.append({"run_id": seed["run_id"], "metrics": metrics})
         summary: dict[str, dict[str, float]] = summarize_seeds([seed["metrics"] for seed in seeds])
         client.log_batch(
@@ -130,10 +154,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Standard medical benchmarks (lm-evaluation-harness).")
     parser.add_argument("overrides", nargs="*", help="Hydra overrides, for example model=qwen3-1.7b")
     parser.add_argument("--runs", nargs="+", required=True, help="Fine-tuning runs, e.g. lora_original")
+    parser.add_argument(
+        "--pretrained", action="store_true", help="Also benchmark the PubMed-pretrained model before fine-tuning"
+    )
     args = parser.parse_args()
 
     config: MultitaskConfig = load_multitask_config(args.overrides)
-    outcome: dict[str, Any] = run_benchmarks(config, args.runs)
+    outcome: dict[str, Any] = run_benchmarks(config, args.runs, args.pretrained)
     save_stage_result(config.results_dir, "benchmarks", outcome)
     print(json.dumps({run: value["summary"] for run, value in outcome["runs"].items()}, indent=2))
 

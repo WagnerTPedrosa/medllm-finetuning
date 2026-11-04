@@ -5,7 +5,7 @@ import pytest
 from medllm.config import MultitaskConfig, load_multitask_config
 from medllm.training.finetune import (
     base_model_id,
-    build_multitask_sft_config,
+    build_sft_config,
     epoch_metrics,
     finetune_stage,
     steps_per_epoch,
@@ -21,10 +21,10 @@ def test_steps_per_epoch_rounds_up() -> None:
     assert steps_per_epoch(examples_per_epoch=100, batch_size=8) == 13
 
 
-def test_build_multitask_sft_config_evaluates_once_per_mixture_epoch(tmp_path: Path) -> None:
+def test_build_sft_config_evaluates_once_per_mixture_epoch(tmp_path: Path) -> None:
     config = load()
 
-    sft_config = build_multitask_sft_config(config, tmp_path, seed=7, epoch_steps=1000)
+    sft_config = build_sft_config(config, tmp_path, seed=7, epoch_steps=1000)
 
     assert sft_config.num_train_epochs == 1
     assert sft_config.eval_strategy == "steps" and sft_config.eval_steps == 1000
@@ -37,10 +37,10 @@ def test_build_multitask_sft_config_evaluates_once_per_mixture_epoch(tmp_path: P
     assert sft_config.seed == 7
 
 
-def test_build_multitask_sft_config_uses_trial_hyperparameters(tmp_path: Path) -> None:
+def test_build_sft_config_uses_trial_hyperparameters(tmp_path: Path) -> None:
     hyperparameters = {"learning_rate": 1e-4, "batch_size": 32, "lr_scheduler_type": "cosine", "warmup_ratio": 0.05}
 
-    sft_config = build_multitask_sft_config(
+    sft_config = build_sft_config(
         load(), tmp_path, seed=1, epoch_steps=250, hyperparameters=hyperparameters, save_models=False
     )
 
@@ -52,10 +52,10 @@ def test_build_multitask_sft_config_uses_trial_hyperparameters(tmp_path: Path) -
     assert sft_config.eval_steps == 250
 
 
-def test_build_multitask_sft_config_follows_gradient_checkpointing(tmp_path: Path) -> None:
+def test_build_sft_config_follows_gradient_checkpointing(tmp_path: Path) -> None:
     config = load()
 
-    sft_config = build_multitask_sft_config(config, tmp_path, seed=1, epoch_steps=10)
+    sft_config = build_sft_config(config, tmp_path, seed=1, epoch_steps=10)
 
     assert sft_config.gradient_checkpointing == config.finetune.gradient_checkpointing
 

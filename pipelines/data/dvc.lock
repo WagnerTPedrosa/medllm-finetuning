@@ -78,18 +78,18 @@ stages:
       nfiles: 9
     - path: src/medllm/data/finetune_data.py
       hash: md5
-      md5: 418aabb372c00aa5513c2dd715cde6d2
-      size: 6278
+      md5: 769d8da236d25ad9fdf7d960826c1835
+      size: 6302
     - path: src/medllm/data/splits.py
       hash: md5
-      md5: bd09bebf13d28fe07852729081122eb3
-      size: 7204
+      md5: f6d39df52b46b008a1cb49aca8a7ff5b
+      size: 7202
     params:
       configs/config.yaml:
-        multitask.medmcqa_validation_size: 150
-        multitask.medqa_validation_size: 150
-        multitask.medtext_holdout_fraction: 0.2
-        multitask.pubmedqa_validation_size: 50
+        finetune_data.medmcqa_validation_size: 150
+        finetune_data.medqa_validation_size: 150
+        finetune_data.medtext_holdout_fraction: 0.2
+        finetune_data.pubmedqa_validation_size: 50
         seed: 42
     outs:
     - path: data/interim/finetune/splits
@@ -108,12 +108,12 @@ stages:
       nfiles: 14
     - path: src/medllm/data/finetune_data.py
       hash: md5
-      md5: 418aabb372c00aa5513c2dd715cde6d2
-      size: 6278
+      md5: 769d8da236d25ad9fdf7d960826c1835
+      size: 6302
     - path: src/medllm/data/splits.py
       hash: md5
-      md5: bd09bebf13d28fe07852729081122eb3
-      size: 7204
+      md5: f6d39df52b46b008a1cb49aca8a7ff5b
+      size: 7202
     params:
       configs/model/qwen3-1.7b.yaml:
         model.max_seq_len: 2048
@@ -142,15 +142,15 @@ stages:
       size: 3226
     - path: src/medllm/data/finetune_data.py
       hash: md5
-      md5: 418aabb372c00aa5513c2dd715cde6d2
-      size: 6278
+      md5: 769d8da236d25ad9fdf7d960826c1835
+      size: 6302
     - path: src/medllm/data/preprocessing.py
       hash: md5
       md5: 5a0518d1c92a8e08f1005226dc7cf4b4
       size: 16597
     params:
       configs/config.yaml:
-        multitask.system_prompt: You are a medical assistant. Answer medical 
+        finetune_data.system_prompt: You are a medical assistant. Answer medical
           questions accurately.
     outs:
     - path: data/interim/finetune/preprocessed

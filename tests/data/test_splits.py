@@ -69,7 +69,7 @@ def test_split_examples_holds_out_validation_sets_and_keeps_the_tests() -> None:
         "medqa_test": task_rows("medqa_test", 2, ["D"]),
     }
     data = replace(
-        load().multitask,
+        load().finetune_data,
         medtext_holdout_fraction=0.2,
         pubmedqa_validation_size=4,
         medmcqa_validation_size=3,

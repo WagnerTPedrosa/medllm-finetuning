@@ -25,7 +25,7 @@ data_filter:
   tokenizer: openai-community/gpt2
   max_seq_len: 1024
 
-multitask:
+finetune_data:
   processed_dir: data/processed/multitask_v1
 
 corpus:

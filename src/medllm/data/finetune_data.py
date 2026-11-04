@@ -86,8 +86,8 @@ def write_step(splits: dict[str, Dataset], stats: dict[str, Any], output_dir: Pa
 
 
 def run_preprocess(config: MultitaskConfig) -> None:
-    """Step 1: read the downloaded datasets and write the examples to `multitask.preprocessed_dir`."""
-    data = config.multitask
+    """Step 1: read the downloaded datasets and write the examples to `finetune_data.preprocessed_dir`."""
+    data = config.finetune_data
     output_dir = Path(data.preprocessed_dir)
     if output_dir.exists():
         print(f"{output_dir} already exists")
@@ -101,8 +101,8 @@ def run_preprocess(config: MultitaskConfig) -> None:
 
 
 def run_split(config: MultitaskConfig) -> None:
-    """Step 2: split the examples into `multitask.splits_dir`."""
-    data = config.multitask
+    """Step 2: split the examples into `finetune_data.splits_dir`."""
+    data = config.finetune_data
     output_dir = Path(data.splits_dir)
     if output_dir.exists():
         print(f"{output_dir} already exists")
@@ -114,8 +114,8 @@ def run_split(config: MultitaskConfig) -> None:
 
 
 def run_filter_length(config: MultitaskConfig) -> None:
-    """Step 3: filter the splits with the model's tokenizer into `multitask.processed_dir`."""
-    data = config.multitask
+    """Step 3: filter the splits with the model's tokenizer into `finetune_data.processed_dir`."""
+    data = config.finetune_data
     output_dir = Path(data.processed_dir)
     if output_dir.exists():
         print(f"{output_dir} already exists")

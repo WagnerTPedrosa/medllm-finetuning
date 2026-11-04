@@ -6,7 +6,7 @@ from typing import Any
 from datasets import Dataset, DatasetDict, concatenate_datasets
 from transformers import PreTrainedTokenizerBase
 
-from medllm.config import MultitaskDataConfig
+from medllm.config import FinetuneDataConfig
 
 TASKS = ("medtext", "pubmedqa", "medmcqa", "medqa")
 
@@ -71,7 +71,7 @@ def split_dataset(dataset: Dataset, holdout_fraction: float, seed: int) -> Datas
 
 
 def split_examples(
-    examples: dict[str, Dataset], data: MultitaskDataConfig, seed: int
+    examples: dict[str, Dataset], data: FinetuneDataConfig, seed: int
 ) -> dict[str, Dataset]:
     """Hold out the validation sets (and MedText's test set) from the examples.
 

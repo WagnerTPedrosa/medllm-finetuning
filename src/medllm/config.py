@@ -216,7 +216,7 @@ class DatasetsConfig:
 
 
 @dataclass(frozen=True)
-class MultitaskDataConfig:
+class FinetuneDataConfig:
     preprocessed_dir: str
     splits_dir: str
     processed_dir: str
@@ -300,6 +300,8 @@ class BenchmarksConfig:
     """lm-evaluation-harness tasks and how they are run."""
 
     tasks: list[str]
+    # General knowledge, to see whether the PubMed pretraining costs it (forgetting)
+    general_tasks: list[str]
     num_fewshot: int
     batch_size: int
 
@@ -312,7 +314,7 @@ class MultitaskConfig:
     training: TrainingConfig
     data_filter: DataFilterConfig
     datasets: DatasetsConfig
-    multitask: MultitaskDataConfig
+    finetune_data: FinetuneDataConfig
     mixture: MixtureConfig
     finetune: FinetuneConfig
     sweep: MultitaskSweepConfig
@@ -359,7 +361,7 @@ def load_multitask_config(overrides: list[str] | None = None) -> MultitaskConfig
             raw_dir=raw["datasets"]["raw_dir"],
             sources={name: SourceDataset(**source) for name, source in raw["datasets"]["sources"].items()},
         ),
-        multitask=MultitaskDataConfig(**raw["multitask"]),
+        finetune_data=FinetuneDataConfig(**raw["finetune_data"]),
         mixture=MixtureConfig(**raw["mixture"]),
         finetune=FinetuneConfig(**finetune_section),
         sweep=MultitaskSweepConfig(**sweep_section),

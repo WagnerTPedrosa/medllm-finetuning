@@ -49,7 +49,7 @@ from medllm.modeling import (
 from medllm.tracking import configure_tracking, start_stage_run
 from medllm.training.finetune import (
     VALIDATION_SETS,
-    build_multitask_sft_config,
+    build_sft_config,
     epoch_metrics,
     steps_per_epoch,
 )
@@ -204,7 +204,7 @@ def sweep_objective(
         trial.set_user_attr("mlflow_run_id", run.info.run_id)
         trainer = SFTTrainer(
             model=load_causal_lm(model_source, weights_dtype(config.finetune.method)),
-            args=build_multitask_sft_config(
+            args=build_sft_config(
                 config, trial_dir, config.seed, eval_steps, hyperparameters, save_models=False
             ),
             # The whole mixture, so the schedule has the length of a full run
@@ -248,7 +248,7 @@ def run_multitask_sweep(config: MultitaskConfig) -> tuple[dict[str, Any], list[d
         The best completed trial, all trial rows and the Optuna study.
     """
     sweep = config.sweep
-    splits: DatasetDict = load_finetune_data(config.multitask.processed_dir)
+    splits: DatasetDict = load_finetune_data(config.finetune_data.processed_dir)
     model_source: str = resolve_model_source(config.model.model_id)
     configure_tracking(config)
     study = optuna.create_study(

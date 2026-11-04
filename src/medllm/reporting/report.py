@@ -263,15 +263,16 @@ def guessing_accuracy(stats_path: str | Path) -> dict[str, float]:
     }
 
 
-def benchmarks_markdown(results_root: str | Path, models: list[str]) -> str:
+def benchmarks_markdown(results_root: str | Path, models: list[str], group: str = "tasks") -> str:
     """Table of the lm-evaluation-harness accuracies: mean over seeds ± standard error, and their average.
 
     Args:
         results_root: Directory with one results directory per model.
         models: Models to include (those without `benchmarks.json` are skipped).
+        group: Tasks to show: `tasks` (medical) or `general_tasks`.
 
     Returns:
-        A Markdown table, or an empty string when no model has benchmark results.
+        A Markdown table, or an empty string when no model has results for the group.
     """
     lines: list[str] = []
     for model in models:
@@ -279,7 +280,9 @@ def benchmarks_markdown(results_root: str | Path, models: list[str]) -> str:
         if not path.exists():
             continue
         benchmarks: dict[str, Any] = json.loads(path.read_text())
-        tasks: list[str] = benchmarks["tasks"]
+        if group not in benchmarks:
+            continue
+        tasks: list[str] = benchmarks[group]
         if not lines:
             lines.append("| Model | Run | " + " | ".join(tasks) + " | Average |")
             lines.append("|" + "---|" * (len(tasks) + 3))
@@ -308,6 +311,7 @@ def main() -> None:
     table: str = comparison_markdown(rows, guessing_accuracy(args.data_stats))
     paired: str = paired_comparisons_markdown(rows)
     benchmarks: str = benchmarks_markdown(args.results_dir, args.models)
+    general_benchmarks: str = benchmarks_markdown(args.results_dir, args.models, "general_tasks")
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -322,8 +326,13 @@ def main() -> None:
         + paired
         + "\n## Standard benchmarks\n\n"
         "lm-evaluation-harness, 0-shot, multiple choice with the options shown, in the chat "
-        "format: accuracy ± standard error. Comparable with published results.\n\n"
+        "format: accuracy ± standard error. Comparable with published results. "
+        "`zero-shot_dapt` is the PubMed-pretrained model before fine-tuning.\n\n"
         + (benchmarks or "Not run.")
+        + "\n\n## General knowledge\n\n"
+        "The same, on general tasks: a drop from `zero-shot` means the medical training "
+        "made the model forget general knowledge.\n\n"
+        + (general_benchmarks or "Not run.")
         + "\n"
     )
     print(table)

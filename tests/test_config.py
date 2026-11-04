@@ -97,14 +97,14 @@ def test_fine_tuning_data_is_filtered_with_the_model_tokenizer() -> None:
 
     assert qwen.data_filter.tokenizer == qwen.model.model_id
     assert qwen.data_filter.max_seq_len == qwen.model.max_seq_len
-    assert qwen.multitask.processed_dir == "data/processed/finetune_qwen3-1.7b"
+    assert qwen.finetune_data.processed_dir == "data/processed/finetune_qwen3-1.7b"
     assert qwen.training.max_epochs == qwen.mixture.epochs
 
 
 def test_gpt2_keeps_the_archived_v1_data() -> None:
     gpt2: MultitaskConfig = load_multitask_config(["model=gpt2"])
 
-    assert gpt2.multitask.processed_dir == "data/processed/multitask_v1"
+    assert gpt2.finetune_data.processed_dir == "data/processed/multitask_v1"
     assert load_pretrain_config(["model=gpt2"]).corpus.processed_dir == "data/processed/pubmed_v1_gpt2"
     assert gpt2.data_filter.tokenizer == "openai-community/gpt2"
     assert gpt2.finetune.method == "full"

@@ -357,7 +357,7 @@ def run_geval(config: MultitaskConfig, runs: list[str]) -> dict[str, Any]:
         `bases`, and the score of every answer per run and criterion under `scores`.
     """
     configure_tracking(config)
-    test_set: Dataset = load_finetune_data(config.multitask.processed_dir)["test_medtext"]
+    test_set: Dataset = load_finetune_data(config.finetune_data.processed_dir)["test_medtext"]
     if config.geval.num_examples is not None:
         test_set = test_set.select(range(min(config.geval.num_examples, len(test_set))))
     questions: list[str] = [message_text(messages) for messages in test_set["prompt"]]

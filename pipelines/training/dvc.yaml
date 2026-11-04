@@ -2,10 +2,15 @@
 #
 #   evaluate_zero_shot@<model>       the base model before fine-tuning -> results/<model>/baseline.json
 #   finetune_lora_original@<model>   LoRA on the Hub model -> results/<model>/finetune_lora_original.json
+#   pretrain@<model>                 PubMed pretraining (DAPT) -> results/<model>/pretrain.json
+#   finetune_lora_dapt@<model>       LoRA on the pretrained model -> results/<model>/finetune_lora_dapt.json
 #   judge_geval@<model>              LLM-as-judge on the MedText answers -> results/<model>/geval.json
-#   evaluate_benchmarks@<model>      lm-evaluation-harness (MedQA, MedMCQA, PubMedQA, MMLU medical) -> results/<model>/benchmarks.json
+#   evaluate_benchmarks@<model>      lm-evaluation-harness (medical tasks, plus MMLU, ARC and
+#                                    HellaSwag for forgetting) -> results/<model>/benchmarks.json
 #   report                           comparison tables -> reports/comparison.md
-#   pretrain@, finetune_lora_dapt@   the PubMed branch (frozen)
+#
+# The evaluation stages compare both fine-tuning runs (original and dapt), so
+# they wait for the PubMed branch.
 # Pipeline v2, Qwen3-1.7B on MedText, PubMedQA, MedMCQA and MedQA
 # (the GPT-2 pipeline is archived at git tag v1-gpt2).
 #
@@ -145,12 +150,13 @@ stages:
     foreach: ${models}
     do:
       wdir: ../..
-      cmd: uv run python -m medllm.evaluation.geval model=${item} --runs lora_original
+      cmd: uv run python -m medllm.evaluation.geval model=${item} --runs lora_original lora_dapt
       deps:
         - src/medllm/evaluation/geval.py
         - src/medllm/evaluation/generation.py
         - data/processed/finetune_${item}
         - results/${item}/finetune_lora_original.json
+        - results/${item}/finetune_lora_dapt.json
       params:
         - configs/config.yaml:
             - geval.judge_model
@@ -164,16 +170,18 @@ stages:
     foreach: ${models}
     do:
       wdir: ../..
-      cmd: uv run python -m medllm.evaluation.benchmarks model=${item} --runs lora_original
+      cmd: uv run python -m medllm.evaluation.benchmarks model=${item} --runs lora_original lora_dapt --pretrained
       deps:
         - src/medllm/evaluation/benchmarks.py
         - src/medllm/evaluation/lm_eval_tasks
         - results/${item}/baseline.json
+        - results/${item}/pretrain.json
         - results/${item}/finetune_lora_original.json
+        - results/${item}/finetune_lora_dapt.json
       params:
         - configs/config.yaml:
             - benchmarks
-            - multitask.system_prompt
+            - finetune_data.system_prompt
       metrics:
         - results/${item}/benchmarks.json:
             cache: false
@@ -189,6 +197,7 @@ stages:
       - data/processed/finetune_qwen3-1.7b/stats.json
       - results/qwen3-1.7b/baseline.json
       - results/qwen3-1.7b/finetune_lora_original.json
+      - results/qwen3-1.7b/finetune_lora_dapt.json
       - results/qwen3-1.7b/geval.json
       - results/qwen3-1.7b/benchmarks.json
     outs:

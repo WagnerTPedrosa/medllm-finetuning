@@ -69,8 +69,9 @@ pretraining:
   eval_batch_size: ???
   # Recompute activations in the backward pass: less memory, about 30% slower
   gradient_checkpointing: ???
-  eval_steps: 100
-  save_steps: 100
+  # A checkpoint (weights and optimizer state) is ~27 GB for Qwen3-1.7B
+  eval_steps: 250
+  save_steps: 500
   save_total_limit: 2
   logging_steps: 10
   bf16: true
@@ -106,7 +107,7 @@ datasets:
     medqa: {dataset_id: GBaker/MedQA-USMLE-4-options, subset: null, revision: 0fb93dd23a7339b6dcd27e241cb9b5eca62d4d18}
 
 # Fine-tuning data: raw -> examples -> splits (model-independent) -> processed (per model)
-multitask:
+finetune_data:
   preprocessed_dir: data/interim/finetune/preprocessed
   splits_dir: data/interim/finetune/splits
   processed_dir: data/processed/finetune_${model.name}
@@ -195,7 +196,7 @@ sweep:
 # apart from the project with `uv tool install vllm`.
 # Standard medical benchmarks (lm-evaluation-harness), comparable with published
 # results: multiple choice with the options shown, 0-shot, in the chat format the
-# models are trained on (with `multitask.system_prompt`)
+# models are trained on (with `finetune_data.system_prompt`)
 benchmarks:
   tasks:
     - medqa_4options
@@ -208,6 +209,12 @@ benchmarks:
     - mmlu_college_medicine
     - mmlu_medical_genetics
     - mmlu_professional_medicine
+  # General knowledge and common sense: does the PubMed pretraining make the
+  # model forget them? (the report shows them in their own table)
+  general_tasks:
+    - mmlu
+    - arc_challenge
+    - hellaswag
   num_fewshot: 0
   batch_size: 16
 

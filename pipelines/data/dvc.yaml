@@ -53,7 +53,7 @@ stages:
       - data/benchmarks/pubmedqa_test_ground_truth.json
     params:
       - configs/config.yaml:
-          - multitask.system_prompt
+          - finetune_data.system_prompt
     outs:
       - data/interim/finetune/preprocessed:
           cache: false
@@ -68,10 +68,10 @@ stages:
     params:
       - configs/config.yaml:
           - seed
-          - multitask.medtext_holdout_fraction
-          - multitask.pubmedqa_validation_size
-          - multitask.medmcqa_validation_size
-          - multitask.medqa_validation_size
+          - finetune_data.medtext_holdout_fraction
+          - finetune_data.pubmedqa_validation_size
+          - finetune_data.medmcqa_validation_size
+          - finetune_data.medqa_validation_size
     outs:
       - data/interim/finetune/splits:
           cache: false

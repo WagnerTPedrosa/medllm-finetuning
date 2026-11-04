@@ -187,3 +187,40 @@ def test_benchmarks_markdown_shows_accuracy_with_standard_error_and_the_average(
 
 def test_benchmarks_markdown_is_empty_without_results(tmp_path: Path) -> None:
     assert benchmarks_markdown(tmp_path, ["m"]) == ""
+
+
+def test_benchmarks_markdown_shows_the_general_tasks_in_their_own_table(tmp_path: Path) -> None:
+    save_stage_result(
+        tmp_path / "m",
+        "benchmarks",
+        {
+            "tasks": ["medqa_4options"],
+            "general_tasks": ["mmlu", "hellaswag"],
+            "runs": {
+                "zero-shot": {
+                    "seeds": [
+                        {
+                            "metrics": {
+                                "benchmark_mmlu_acc": 0.6,
+                                "benchmark_mmlu_acc_stderr": 0.02,
+                                "benchmark_hellaswag_acc": 0.4,
+                                "benchmark_hellaswag_acc_stderr": 0.01,
+                            }
+                        }
+                    ]
+                }
+            },
+        },
+    )
+
+    table = benchmarks_markdown(tmp_path, ["m"], "general_tasks")
+
+    lines = table.splitlines()
+    assert lines[0] == "| Model | Run | mmlu | hellaswag | Average |"
+    assert lines[2] == "| m | zero-shot | 0.600 ± 0.020 | 0.400 ± 0.010 | 0.500 |"
+
+
+def test_benchmarks_markdown_skips_results_without_general_tasks(tmp_path: Path) -> None:
+    save_stage_result(tmp_path / "m", "benchmarks", {"tasks": ["medqa_4options"], "runs": {}})
+
+    assert benchmarks_markdown(tmp_path, ["m"], "general_tasks") == ""

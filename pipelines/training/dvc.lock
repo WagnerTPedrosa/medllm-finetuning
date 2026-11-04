@@ -18,8 +18,8 @@ stages:
       size: 1601
     - path: src/medllm/evaluation/tasks.py
       hash: md5
-      md5: 89f4662824352435474958f53d232b2b
-      size: 4413
+      md5: db31ef024cffd3a09a625747d4691838
+      size: 4417
     - path: src/medllm/evaluation/zero_shot.py
       hash: md5
       md5: da58ac40c31bd77b67a4faf1f96c50bd
@@ -64,8 +64,8 @@ stages:
       size: 1601
     - path: src/medllm/evaluation/tasks.py
       hash: md5
-      md5: 89f4662824352435474958f53d232b2b
-      size: 4413
+      md5: db31ef024cffd3a09a625747d4691838
+      size: 4417
     - path: src/medllm/modeling.py
       hash: md5
       md5: 5f706710c6fb7bef377ffba0349cce78
@@ -76,8 +76,8 @@ stages:
       size: 7182
     - path: src/medllm/training/finetune.py
       hash: md5
-      md5: ad3fe626576327b4785631d04cd4442c
-      size: 12704
+      md5: 1d9cc1b659514cd600691a1ef9b30280
+      size: 12692
     params:
       configs/config.yaml:
         finetune.lora:
@@ -172,8 +172,8 @@ stages:
       size: 65885
     - path: src/medllm/evaluation/benchmarks.py
       hash: md5
-      md5: 5ffc5e9bce6c4642f682dbb9897a513c
-      size: 6036
+      md5: caf0bbd40f51ff33bd63d60247d298c6
+      size: 6040
     - path: src/medllm/evaluation/lm_eval_tasks
       hash: md5
       md5: 2a172c0af5e8a534e90d05354075d9b9.dir
@@ -194,7 +194,7 @@ stages:
           - mmlu_professional_medicine
           num_fewshot: 0
           batch_size: 16
-        multitask.system_prompt: You are a medical assistant. Answer medical 
+        finetune_data.system_prompt: You are a medical assistant. Answer medical
           questions accurately.
     outs:
     - path: results/qwen3-1.7b/benchmarks.json
