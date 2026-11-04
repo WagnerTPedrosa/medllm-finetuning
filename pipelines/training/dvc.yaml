@@ -30,13 +30,12 @@
 # a small JSON summary to results/<model>/ (run ids, model URIs, metrics and
 # every test answer marked right or wrong) that the next stages read.
 #
-# The PubMed pretraining branch (pretrain, evaluate_zero_shot_dapt, finetune_lora_dapt, plus
-# clean_corpus and tokenize_corpus in the data pipeline) is frozen until the fine-tuning on the
-# original model is settled:
-#   uv run dvc unfreeze pipelines/data/dvc.yaml:clean_corpus \
-#     pipelines/data/dvc.yaml:tokenize_corpus@qwen3-1.7b \
-#     pipelines/training/dvc.yaml:pretrain@qwen3-1.7b \
-#     pipelines/training/dvc.yaml:evaluate_zero_shot_dapt@qwen3-1.7b \
+# The PubMed pretraining branch (pretrain, evaluate_zero_shot_dapt,
+# finetune_lora_dapt) is frozen until its learning rate is chosen; to turn it
+# on, delete `frozen: true` from these stages (`dvc unfreeze` cannot edit
+# foreach stages):
+#     pipelines/training/dvc.yaml:pretrain@qwen3-1.7b
+#     pipelines/training/dvc.yaml:evaluate_zero_shot_dapt@qwen3-1.7b
 #     pipelines/training/dvc.yaml:finetune_lora_dapt@qwen3-1.7b
 # The sweeps (`medllm.training.pretrain --sweep`, `medllm.training.sweep`) are not
 # stages: their chosen values go into the model file, so the runs here are

@@ -14,15 +14,12 @@
 # config section). A new base model only reruns the @<model> stages.
 #
 #   uv run dvc repro pipelines/data/dvc.yaml:filter_length@qwen3-1.7b
+#   uv run dvc repro pipelines/data/dvc.yaml:tokenize_corpus@qwen3-1.7b
 #   uv run dvc status pipelines/data/dvc.yaml        # what would run, and why
 #
-# Name the stage: `dvc repro` of the whole file also checks the frozen corpus
-# stages, whose outputs do not exist yet, and fails. The PubMed papers
-# themselves are downloaded by pubmed-extractor, outside this repository
-# (`corpus.raw_dir`). The corpus stages are frozen until the pretraining
-# branch is turned on:
-#   uv run dvc unfreeze pipelines/data/dvc.yaml:clean_corpus \
-#     pipelines/data/dvc.yaml:tokenize_corpus@qwen3-1.7b
+# The PubMed papers themselves are downloaded by pubmed-extractor, outside
+# this repository (`corpus.raw_dir`), so DVC cannot see when they change:
+# delete data/interim/pubmed after a new download.
 # Every stage runs from the repository root (wdir).
 
 vars:
@@ -94,7 +91,6 @@ stages:
             cache: false
 
   clean_corpus:
-    frozen: true
     wdir: ../..
     cmd: uv run python -m medllm.data.corpus clean
     deps:
@@ -115,7 +111,6 @@ stages:
   tokenize_corpus:
     foreach: ${models}
     do:
-      frozen: true
       wdir: ../..
       cmd: uv run python -m medllm.data.corpus tokenize model=${item}
       deps:
