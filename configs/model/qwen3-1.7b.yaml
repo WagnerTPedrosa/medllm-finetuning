@@ -9,7 +9,9 @@ model:
   max_seq_len: 2048
 
 pretraining:
-  # Placeholder until lr_sweep is run: larger models want lower rates than GPT-2
+  # From lr_sweep (150 steps each, PubMed validation loss from 1.848):
+  # 1e-5 -> 1.8235, 3e-5 -> 1.8187, 1e-4 -> 1.8174. 1e-4 gains almost nothing
+  # over 3e-5 and raised the loss in its first steps (forgetting risk)
   learning_rate: 3.0e-5
   # 4 x 64 blocks of 2048 tokens, about 0.5M tokens per optimizer step
   per_device_batch_size: 4

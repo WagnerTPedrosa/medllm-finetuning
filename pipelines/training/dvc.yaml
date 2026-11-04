@@ -19,9 +19,6 @@
 #   uv run dvc repro pipelines/training/dvc.yaml:finetune_lora_original@qwen3-1.7b
 #   uv run dvc status pipelines/training/dvc.yaml         # what would run, and why
 #
-# Name the stage: `dvc repro` of the whole file also checks the frozen
-# pretraining stages, whose outputs do not exist yet, and fails.
-#
 # The stages read the datasets that pipelines/data/dvc.yaml builds; when a
 # dataset is out of date, `dvc repro` rebuilds it first.
 #
@@ -31,12 +28,8 @@
 # every test answer marked right or wrong) that the next stages read.
 #
 # The PubMed pretraining branch (pretrain, evaluate_zero_shot_dapt,
-# finetune_lora_dapt) is frozen until its learning rate is chosen; to turn it
-# on, delete `frozen: true` from these stages (`dvc unfreeze` cannot edit
-# foreach stages):
-#     pipelines/training/dvc.yaml:pretrain@qwen3-1.7b
-#     pipelines/training/dvc.yaml:evaluate_zero_shot_dapt@qwen3-1.7b
-#     pipelines/training/dvc.yaml:finetune_lora_dapt@qwen3-1.7b
+# finetune_lora_dapt) trains on the whole corpus (~4.7 days for Qwen3-1.7B);
+# its learning rate comes from the pretraining sweep.
 # The sweeps (`medllm.training.pretrain --sweep`, `medllm.training.sweep`) are not
 # stages: their chosen values go into the model file, so the runs here are
 # reproducible from git.
@@ -98,7 +91,6 @@ stages:
   pretrain:
     foreach: ${models}
     do:
-      frozen: true
       wdir: ../..
       cmd: uv run python -m medllm.training.pretrain model=${item}
       deps:
@@ -123,7 +115,6 @@ stages:
     # The pretrained model before fine-tuning: what the PubMed pretraining alone does
     foreach: ${models}
     do:
-      frozen: true
       wdir: ../..
       cmd: uv run python -m medllm.evaluation.zero_shot model=${item} --base dapt
       deps:
@@ -147,7 +138,6 @@ stages:
   finetune_lora_dapt:
     foreach: ${models}
     do:
-      frozen: true
       wdir: ../..
       cmd: uv run python -m medllm.training.finetune --base dapt model=${item} finetune.method=lora
       deps:
