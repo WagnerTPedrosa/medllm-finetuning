@@ -1,15 +1,17 @@
 # Configuration of the whole pipeline (PubMed pretraining, multitask
 # fine-tuning, G-Eval), composed by Hydra. The base model is a config group:
 #
-#   uv run python -m src.pretrain model=qwen3-1.7b
+#   uv run python -m medllm.training.finetune model=qwen3-1.7b
 #
-# picks configs/model/qwen3-1.7b.yaml, which fills in every `???` below.
-# The DVC stages in dvc.yaml track the keys they use from these files.
+# picks configs/model/qwen3-1.7b.yaml (the default), which fills in every `???`
+# below. GPT-2 (configs/model/gpt2.yaml) is the archived first experiment
+# (git tag v1-gpt2).
+# The DVC stages in pipelines/*/dvc.yaml track the keys they use from these files.
 # Floats need a decimal point (1.0e-5, not 1e-5): YAML reads 1e-5 as a string.
 
 defaults:
   - _self_
-  - model: gpt2
+  - model: qwen3-1.7b
 
 seed: 42
 
@@ -37,9 +39,13 @@ model:
 corpus:
   # JSONL shards written by pubmed-extractor/build_corpus.py (never modified)
   raw_dir: ~/Documents/Projects/pubmed-corpus
-  processed_dir: data/processed/pubmed_v1_${model.name}
+  # Decontaminated, cleaned and split documents (model-independent)
+  clean_dir: data/interim/pubmed
+  # Tokenized and packed blocks for one base model
+  processed_dir: data/processed/pubmed_${model.name}
   # Held-out documents for validation perplexity, sampled within each stratum
-  validation_fraction: 0.01
+  # 0.1% of ~1M papers: ~1,000 articles, ~6M tokens (enough for a stable perplexity)
+  validation_fraction: 0.001
   # Templated administrative sections (funding, ethics, author contributions, ...)
   remove_boilerplate_sections: true
   # Inline markers such as [1-3] and (Smith et al., 2020)
@@ -57,14 +63,19 @@ pretraining:
   weight_decay: 0.1
   max_grad_norm: 1.0
   num_train_epochs: 1.0
+  # Training-token budget (null: the whole corpus). The cosine schedule decays
+  # over the budget, and the Trainer shuffles the blocks, so a budget trains on
+  # a random part of the corpus
+  max_tokens: null
   # About 0.5M tokens per optimizer step: batch x accumulation x max_seq_len
   per_device_batch_size: ???
   gradient_accumulation_steps: ???
   eval_batch_size: ???
   # Recompute activations in the backward pass: less memory, about 30% slower
   gradient_checkpointing: ???
-  eval_steps: 100
-  save_steps: 100
+  # A checkpoint (weights and optimizer state) is ~27 GB for Qwen3-1.7B
+  eval_steps: 250
+  save_steps: 500
   save_total_limit: 2
   logging_steps: 10
   bf16: true
@@ -83,37 +94,56 @@ lr_sweep:
   learning_rates: ???
   max_steps: 150
 
-# Fine-tuning data, shared by every model. The same tokenizer and length limit
-# decide which examples are dropped, so all models are trained and tested on
-# exactly the same examples.
+# Fine-tuning examples longer than the model's context are dropped (never truncated)
 data_filter:
-  tokenizer: openai-community/gpt2
-  max_seq_len: 1024
+  tokenizer: ${model.model_id}
+  max_seq_len: ${model.max_seq_len}
 
-multitask:
-  processed_dir: data/processed/multitask_v1
-  medtext_dir: data/processed/medtext_v1
-  pubmedqa_dataset_id: qiaojin/PubMedQA
+# Raw datasets, downloaded once at a fixed revision (data/raw/<source>/<split>.parquet)
+datasets:
+  raw_dir: data/raw
+  sources:
+    medtext: {dataset_id: BI55/MedText, subset: null, revision: 96d57f97ae609ff352aa97609a8d612db2d1c0f1}
+    pubmedqa_labeled: {dataset_id: qiaojin/PubMedQA, subset: pqa_labeled, revision: 9001f2853fb87cab8d220904e0de81ac6973b318}
+    pubmedqa_artificial: {dataset_id: qiaojin/PubMedQA, subset: pqa_artificial, revision: 9001f2853fb87cab8d220904e0de81ac6973b318}
+    medmcqa: {dataset_id: openlifescienceai/medmcqa, subset: null, revision: 91c6572c454088bf71b679ad90aa8dffcd0d5868}
+    # USMLE questions with 4 options
+    medqa: {dataset_id: GBaker/MedQA-USMLE-4-options, subset: null, revision: 0fb93dd23a7339b6dcd27e241cb9b5eca62d4d18}
+
+# Fine-tuning data: raw -> examples -> splits (model-independent) -> processed (per model)
+finetune_data:
+  preprocessed_dir: data/interim/finetune/preprocessed
+  splits_dir: data/interim/finetune/splits
+  processed_dir: data/processed/finetune_${model.name}
+  # PMIDs of the official PubMedQA test set (500 PQA-L questions)
   pubmedqa_test_ground_truth: data/benchmarks/pubmedqa_test_ground_truth.json
+  # MedText has one split: this fraction is held out, half validation and half test
+  medtext_holdout_fraction: 0.2
   # PQA-L questions outside the official test set: 450 train / 50 validation
   pubmedqa_validation_size: 50
-  medmcqa_dataset_id: openlifescienceai/medmcqa
-  # Held out from MedMCQA train for model selection (official validation = test)
-  medmcqa_dev_fraction: 0.05
-  # Mixture epochs built into the training set; early stopping usually ends training sooner
-  mixture_epochs: 5
-  # Examples per mixture epoch
+  # Held out from MedMCQA train for model selection. MedMCQA's official
+  # `validation` split is our test set (its official test set has no answers)
+  medmcqa_validation_size: 150
+  # Held out from MedQA train; the official MedQA test set is the test set
+  medqa_validation_size: 150
+  num_proc: 16
+  # System message of every training conversation; serve the model with the same one
+  system_prompt: You are a medical assistant. Answer medical questions accurately.
+
+# Training mixture, built from the unique train_*.jsonl examples when fine-tuning starts
+mixture:
+  # Early stopping usually ends training sooner
+  epochs: 5
+  # Examples per epoch
   medtext_repeats: 5
   pubmedqa_labeled_repeats: 5
   # PQA-A is 93% "yes": sample this many of each decision per epoch
   pubmedqa_artificial_per_class: 15000
   medmcqa_per_epoch: 60000
-  # MedMCQA questions in the combined dev set used for early stopping
-  dev_medmcqa_size: 150
-  num_proc: 16
+  medqa_repeats: 2
 
 training:
-  max_epochs: ${multitask.mixture_epochs}
+  max_epochs: ${mixture.epochs}
   early_stopping_patience: 2
   eval_batch_size: 8
   max_grad_norm: 1.0
@@ -122,11 +152,24 @@ training:
   warmup_ratio: 0.05
 
 finetune:
+  # lora (adapters on a frozen model, merged after training) or full
+  method: ???
   # Chosen with the sweep below, per model
   learning_rate: ???
   batch_size: ???
   gradient_checkpointing: ???
-  seeds: [42, 43, 44]
+  seeds: ???
+  # Used when method is lora
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    # Attention and MLP projections (Qwen and Llama names)
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+    # Trained in full besides the adapters: the chat tokens (<|im_start|>, <|im_end|>,
+    # <think>) are untrained in base models, and LoRA alone cannot learn to write
+    # <|im_end|>. Qwen ties the embeddings to the LM head, so one matrix is trained.
+    modules_to_save: [embed_tokens]
   output_dir: checkpoints/multitask
   # Model fine-tuned by `--base dapt`: the result of the pretraining stage
   dapt_model_id: models:/${mlflow.pretrain_registered_model}@${pretraining.registry_alias}
@@ -143,7 +186,7 @@ sweep:
     warmup_ratio: [0.0, 0.05]
   # Budget per trial, in mixture epochs (the first epoch of the training set)
   train_epochs: 1.0
-  # Dev evaluations per mixture epoch (each one is a pruning checkpoint)
+  # Validation evaluations per mixture epoch (each one is a pruning checkpoint)
   evals_per_epoch: 4
   # Let this many trials finish before pruning, and never prune at the first evaluation
   pruner_startup_trials: 4
@@ -155,6 +198,34 @@ sweep:
 # generated first; then the judge is served by vLLM (started and stopped by the
 # stage, unless a server is already listening at base_url). vLLM is installed
 # apart from the project with `uv tool install vllm`.
+# Standard medical benchmarks (lm-evaluation-harness), comparable with published
+# results: multiple choice with the options shown, 0-shot, in the chat format the
+# models are trained on (with `finetune_data.system_prompt`)
+benchmarks:
+  tasks:
+    - medqa_4options
+    - medmcqa
+    # The harness's pubmedqa task, read from a source `datasets` can still load
+    - pubmedqa_test
+    - mmlu_anatomy
+    - mmlu_clinical_knowledge
+    - mmlu_college_biology
+    - mmlu_college_medicine
+    - mmlu_medical_genetics
+    - mmlu_professional_medicine
+  # General knowledge and common sense: does the PubMed pretraining make the
+  # model forget them? (the report shows them in their own table)
+  general_tasks:
+    - mmlu
+    - arc_challenge
+    - hellaswag
+  # Word perplexity on Wikipedia text (lower is better): forgetting of plain
+  # language, which accuracies can miss. Scored on raw text, without the chat format
+  perplexity_tasks:
+    - wikitext
+  num_fewshot: 0
+  batch_size: 16
+
 geval:
   judge_model: Qwen/Qwen3.8-27B
   base_url: http://localhost:8000/v1

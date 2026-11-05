@@ -1,0 +1,225 @@
+# Training pipeline: PubMed pretraining, LoRA fine-tuning, evaluation and report.
+#
+#   evaluate_zero_shot@<model>       the Hub model before fine-tuning -> results/<model>/baseline.json
+#   finetune_lora_original@<model>   LoRA on the Hub model -> results/<model>/finetune_lora_original.json
+#   pretrain@<model>                 PubMed pretraining (DAPT) -> results/<model>/pretrain.json
+#   evaluate_zero_shot_dapt@<model>  the pretrained model before fine-tuning -> results/<model>/baseline_dapt.json
+#   finetune_lora_dapt@<model>       LoRA on the pretrained model -> results/<model>/finetune_lora_dapt.json
+#   judge_geval@<model>              LLM-as-judge on the MedText answers -> results/<model>/geval.json
+#   evaluate_benchmarks@<model>      lm-evaluation-harness (medical tasks, plus MMLU, ARC and
+#                                    HellaSwag for forgetting) -> results/<model>/benchmarks.json
+#   report                           comparison tables -> reports/comparison.md
+#
+# The evaluation stages compare both fine-tuning runs (original and dapt), so
+# they wait for the PubMed branch.
+# Pipeline v2, Qwen3-1.7B on MedText, PubMedQA, MedMCQA and MedQA
+# (the GPT-2 pipeline is archived at git tag v1-gpt2).
+#
+#   uv run dvc repro pipelines/training/dvc.yaml:report   # report and every stage it needs
+#   uv run dvc repro pipelines/training/dvc.yaml:finetune_lora_original@qwen3-1.7b
+#   uv run dvc status pipelines/training/dvc.yaml         # what would run, and why
+#
+# The stages read the datasets that pipelines/data/dvc.yaml builds; when a
+# dataset is out of date, `dvc repro` rebuilds it first.
+#
+# A stage runs again when its code, its inputs or the config keys under
+# `params` change. Models live in the MLflow Model Registry; each stage writes
+# a small JSON summary to results/<model>/ (run ids, model URIs, metrics and
+# every test answer marked right or wrong) that the next stages read.
+#
+# The PubMed pretraining branch (pretrain, evaluate_zero_shot_dapt,
+# finetune_lora_dapt) trains on the whole corpus (~4.7 days for Qwen3-1.7B);
+# its learning rate comes from the pretraining sweep.
+# The sweeps (`medllm.training.pretrain --sweep`, `medllm.training.sweep`) are not
+# stages: their chosen values go into the model file, so the runs here are
+# reproducible from git.
+
+vars:
+  - models:
+      - qwen3-1.7b
+
+stages:
+  # Pretain the base model with data from the papers from pubmed
+  evaluate_zero_shot:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.evaluation.zero_shot model=${item}
+      deps:
+        - src/medllm/evaluation/zero_shot.py
+        - src/medllm/evaluation/tasks.py
+        - src/medllm/evaluation/choices.py
+        - src/medllm/evaluation/loss.py
+        - src/medllm/modeling.py
+        - data/processed/finetune_${item}
+      params:
+        - configs/config.yaml:
+            - training.eval_batch_size
+        - configs/model/${item}.yaml:
+            - model
+      metrics:
+        - results/${item}/baseline.json:
+            cache: false
+
+  finetune_lora_original:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.training.finetune --base original model=${item} finetune.method=lora
+      deps:
+        - src/medllm/training/finetune.py
+        - src/medllm/data/mixture.py
+        - src/medllm/evaluation/tasks.py
+        - src/medllm/evaluation/choices.py
+        - src/medllm/evaluation/loss.py
+        - src/medllm/modeling.py
+        - src/medllm/tracking.py
+        - data/processed/finetune_${item}
+      params:
+        - configs/config.yaml:
+            - seed
+            - mixture
+            - training
+            - finetune.lora
+        - configs/model/${item}.yaml:
+            - model
+            - finetune
+      metrics:
+        - results/${item}/finetune_lora_original.json:
+            cache: false
+
+  pretrain:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.training.pretrain model=${item}
+      deps:
+        - src/medllm/training/pretrain.py
+        - src/medllm/modeling.py
+        - src/medllm/tracking.py
+        - data/processed/pubmed_${item}
+      params:
+        - configs/config.yaml:
+            - seed
+            - pretraining
+        - configs/model/${item}.yaml:
+            - model
+            - pretraining
+      metrics:
+        - results/${item}/pretrain.json:
+            cache: false
+  
+  # Evaluate the  
+
+  evaluate_zero_shot_dapt:
+    # The pretrained model before fine-tuning: what the PubMed pretraining alone does
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.evaluation.zero_shot model=${item} --base dapt
+      deps:
+        - src/medllm/evaluation/zero_shot.py
+        - src/medllm/evaluation/tasks.py
+        - src/medllm/evaluation/choices.py
+        - src/medllm/evaluation/loss.py
+        - src/medllm/modeling.py
+        - data/processed/finetune_${item}
+        - results/${item}/pretrain.json
+      params:
+        - configs/config.yaml:
+            - training.eval_batch_size
+            - finetune.dapt_model_id
+        - configs/model/${item}.yaml:
+            - model
+      metrics:
+        - results/${item}/baseline_dapt.json:
+            cache: false
+
+  finetune_lora_dapt:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.training.finetune --base dapt model=${item} finetune.method=lora
+      deps:
+        - src/medllm/training/finetune.py
+        - src/medllm/data/mixture.py
+        - src/medllm/evaluation/tasks.py
+        - src/medllm/evaluation/choices.py
+        - src/medllm/evaluation/loss.py
+        - src/medllm/modeling.py
+        - src/medllm/tracking.py
+        - data/processed/finetune_${item}
+        # The pretrained model it starts from
+        - results/${item}/pretrain.json
+      params:
+        - configs/config.yaml:
+            - seed
+            - mixture
+            - training
+            - finetune.lora
+            - finetune.dapt_model_id
+        - configs/model/${item}.yaml:
+            - model
+            - finetune
+      metrics:
+        - results/${item}/finetune_lora_dapt.json:
+            cache: false
+
+  judge_geval:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.evaluation.geval model=${item} --runs lora_original lora_dapt
+      deps:
+        - src/medllm/evaluation/geval.py
+        - src/medllm/evaluation/generation.py
+        - data/processed/finetune_${item}
+        - results/${item}/finetune_lora_original.json
+        - results/${item}/finetune_lora_dapt.json
+      params:
+        - configs/config.yaml:
+            - geval.judge_model
+            - geval.max_new_tokens
+            - geval.num_examples
+      metrics:
+        - results/${item}/geval.json:
+            cache: false
+
+  evaluate_benchmarks:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.evaluation.benchmarks model=${item} --runs lora_original lora_dapt --pretrained
+      deps:
+        - src/medllm/evaluation/benchmarks.py
+        - src/medllm/evaluation/lm_eval_tasks
+        - results/${item}/baseline.json
+        - results/${item}/pretrain.json
+        - results/${item}/finetune_lora_original.json
+        - results/${item}/finetune_lora_dapt.json
+      params:
+        - configs/config.yaml:
+            - benchmarks
+            - finetune_data.system_prompt
+      metrics:
+        - results/${item}/benchmarks.json:
+            cache: false
+
+  report:
+    # One base model for now; list every model under --models when there are more
+    wdir: ../..
+    cmd: >-
+      uv run python -m medllm.reporting.report --models qwen3-1.7b
+      --data-stats data/processed/finetune_qwen3-1.7b/stats.json
+    deps:
+      - src/medllm/reporting/report.py
+      - data/processed/finetune_qwen3-1.7b/stats.json
+      - results/qwen3-1.7b/baseline.json
+      - results/qwen3-1.7b/baseline_dapt.json
+      - results/qwen3-1.7b/finetune_lora_original.json
+      - results/qwen3-1.7b/finetune_lora_dapt.json
+      - results/qwen3-1.7b/geval.json
+      - results/qwen3-1.7b/benchmarks.json
+    outs:
+      - reports/comparison.md:
+          cache: false

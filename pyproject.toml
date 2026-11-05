@@ -1,5 +1,5 @@
 [project]
-name="medllm-finetuining"
+name = "medllm"
 version = "0.0.1"
 requires-python = ">=3.11,<3.12"
 dependencies = [
@@ -20,6 +20,15 @@ dependencies = [
     "nvidia-ml-py>=13.615.71",
     "hydra-core>=1.3.8",
     "dvc>=3.67.1",
+    "peft>=0.21.2",
+    "lm-eval>=0.4.9",
+]
+
+[project.optional-dependencies]
+# Fast Gated DeltaNet kernels (Triton) for Qwen3.5-architecture models such as
+# Qwen3.8-27B; without them transformers falls back to a slow PyTorch path
+linear-attention = [
+    "flash-linear-attention",
 ]
 
 [dependency-groups]
@@ -28,6 +37,14 @@ dev = [
     "pytest>=9.2.0",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/medllm"]
+
 [tool.pytest.ini_options]
-pythonpath = ["."]
 testpaths = ["tests"]
+# Test files mirror the package (tests/data/test_*.py, ...) without __init__.py
+addopts = "--import-mode=importlib"

@@ -1,0 +1,21 @@
+# PubMedQA as in the harness's `pubmedqa` task (same prompt and choices), read
+# from qiaojin/PubMedQA at the revision the fine-tuning data uses: the harness's
+# own source (bigbio/pubmed_qa) needs a loading script, which `datasets` no
+# longer runs. Scored on the official test set (500 PQA-L questions).
+task: pubmedqa_test
+dataset_path: qiaojin/PubMedQA
+dataset_name: pqa_labeled
+dataset_kwargs:
+  revision: 9001f2853fb87cab8d220904e0de81ac6973b318
+output_type: multiple_choice
+test_split: train
+process_docs: !function pubmedqa_test.official_test
+doc_to_text: !function pubmedqa_test.doc_to_text
+doc_to_target: final_decision
+doc_to_choice: ["yes", "no", "maybe"]
+metric_list:
+  - metric: acc
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0

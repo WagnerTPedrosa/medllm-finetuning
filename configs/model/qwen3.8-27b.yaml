@@ -1,0 +1,69 @@
+# @package _global_
+# Qwen3.8-27B: only LoRA fine-tuning, no PubMed pretraining (that is the 1.7B
+# experiment). The Hub has no base version: this is the instruct model (hybrid
+# thinking, off here), so it already writes its chat tokens. The checkpoint is
+# multimodal; AutoModelForCausalLM loads its text model only (Qwen3_5ForCausalLM).
+# Its layers mix Gated DeltaNet (linear attention) and full attention: install
+# the `linear-attention` extra (`uv sync --extra linear-attention`), or they run
+# on a much slower PyTorch fallback.
+#
+# Memory: bf16 weights are ~54 GB, so the model is evaluated in bf16 (float32
+# would need ~108 GB) and trained in micro-batches with gradient checkpointing.
+# The 248k-token vocabulary makes the logits large: keep the batches small.
+#
+# Note: Qwen3.8-27B is also the G-Eval judge, which would grade its own
+# fine-tuned answers (self-preference): use another judge for this model.
+
+model:
+  name: qwen3.8-27b
+  model_id: Qwen/Qwen3.8-27B
+  max_seq_len: 2048
+  eval_dtype: bfloat16
+
+training:
+  eval_batch_size: 2
+
+finetune:
+  method: lora
+  # Larger models want lower LoRA rates than the 1.7B (2e-4); not swept (a
+  # sweep at 27B costs days)
+  learning_rate: 1.0e-4
+  # The same examples per optimizer step as the 1.7B, 2 per forward pass
+  batch_size: 16
+  micro_batch_size: 2
+  gradient_checkpointing: true
+  seeds: [42]
+  lora:
+    # Attention and MLP projections, plus the Gated DeltaNet ones (in_proj_qkv,
+    # in_proj_z, out_proj; its tiny in_proj_a/in_proj_b gates stay frozen)
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+      - in_proj_qkv
+      - in_proj_z
+      - out_proj
+    # The chat tokens are already trained in an instruct model
+    modules_to_save: []
+
+benchmarks:
+  batch_size: 4
+
+sweep:
+  search_space:
+    learning_rate: {low: 2.0e-5, high: 2.0e-4, log: true}
+
+# Not pretrained: values only so the configuration is complete
+pretraining:
+  learning_rate: 1.0e-5
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 256
+  eval_batch_size: 1
+  gradient_checkpointing: true
+
+lr_sweep:
+  learning_rates: [1.0e-5]

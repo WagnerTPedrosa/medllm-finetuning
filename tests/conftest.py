@@ -4,14 +4,12 @@ from pathlib import Path
 import mlflow
 import pytest
 
-from src.config import Config, load_config
-
-CONFIG_PATH = Path("configs/gpt2_medtext.yaml").resolve()
+from medllm.config import MultitaskConfig, load_multitask_config
 
 
 @pytest.fixture
-def config() -> Config:
-    return load_config(CONFIG_PATH)
+def config() -> MultitaskConfig:
+    return load_multitask_config()
 
 
 @pytest.fixture

@@ -1,0 +1,236 @@
+schema: '2.0'
+stages:
+  evaluate_zero_shot@qwen3-1.7b:
+    cmd: uv run python -m medllm.evaluation.zero_shot model=qwen3-1.7b
+    deps:
+    - path: data/processed/finetune_qwen3-1.7b
+      hash: md5
+      md5: c125756b0e859b981827356775578dc4.dir
+      size: 568233509
+      nfiles: 15
+    - path: src/medllm/evaluation/choices.py
+      hash: md5
+      md5: 1f2552db5fcc32e63303d58289fde2d5
+      size: 8084
+    - path: src/medllm/evaluation/loss.py
+      hash: md5
+      md5: 3bf7d64b5d5573b455c613c574bc8d42
+      size: 1601
+    - path: src/medllm/evaluation/tasks.py
+      hash: md5
+      md5: db31ef024cffd3a09a625747d4691838
+      size: 4417
+    - path: src/medllm/evaluation/zero_shot.py
+      hash: md5
+      md5: 8a76c3dcf708fde0837c9c3b44baa12c
+      size: 3239
+    - path: src/medllm/modeling.py
+      hash: md5
+      md5: 5f706710c6fb7bef377ffba0349cce78
+      size: 5411
+    params:
+      configs/config.yaml:
+        training.eval_batch_size: 8
+      configs/model/qwen3-1.7b.yaml:
+        model:
+          name: qwen3-1.7b
+          model_id: Qwen/Qwen3-1.7B-Base
+          max_seq_len: 2048
+    outs:
+    - path: results/qwen3-1.7b/baseline.json
+      hash: md5
+      md5: 34bcc4899aaf5a721ca5823aa61d9021
+      size: 64920
+  finetune_lora_original@qwen3-1.7b:
+    cmd: uv run python -m medllm.training.finetune --base original 
+      model=qwen3-1.7b finetune.method=lora
+    deps:
+    - path: data/processed/finetune_qwen3-1.7b
+      hash: md5
+      md5: c125756b0e859b981827356775578dc4.dir
+      size: 568233509
+      nfiles: 15
+    - path: src/medllm/data/mixture.py
+      hash: md5
+      md5: 829d0c9e11172c13298eadf1c8ffa935
+      size: 3591
+    - path: src/medllm/evaluation/choices.py
+      hash: md5
+      md5: 1f2552db5fcc32e63303d58289fde2d5
+      size: 8084
+    - path: src/medllm/evaluation/loss.py
+      hash: md5
+      md5: 3bf7d64b5d5573b455c613c574bc8d42
+      size: 1601
+    - path: src/medllm/evaluation/tasks.py
+      hash: md5
+      md5: db31ef024cffd3a09a625747d4691838
+      size: 4417
+    - path: src/medllm/modeling.py
+      hash: md5
+      md5: 5f706710c6fb7bef377ffba0349cce78
+      size: 5411
+    - path: src/medllm/tracking.py
+      hash: md5
+      md5: a74d02c09446b76445bce77af83ab770
+      size: 7182
+    - path: src/medllm/training/finetune.py
+      hash: md5
+      md5: 1d9cc1b659514cd600691a1ef9b30280
+      size: 12692
+    params:
+      configs/config.yaml:
+        finetune.lora:
+          r: 16
+          alpha: 32
+          dropout: 0.05
+          target_modules:
+          - q_proj
+          - k_proj
+          - v_proj
+          - o_proj
+          - gate_proj
+          - up_proj
+          - down_proj
+          modules_to_save:
+          - embed_tokens
+        mixture:
+          epochs: 5
+          medtext_repeats: 5
+          pubmedqa_labeled_repeats: 5
+          pubmedqa_artificial_per_class: 15000
+          medmcqa_per_epoch: 60000
+          medqa_repeats: 2
+        seed: 42
+        training:
+          max_epochs: ${mixture.epochs}
+          early_stopping_patience: 2
+          eval_batch_size: 8
+          max_grad_norm: 1.0
+          weight_decay: 0.01
+          lr_scheduler_type: constant
+          warmup_ratio: 0.05
+      configs/model/qwen3-1.7b.yaml:
+        finetune:
+          method: lora
+          learning_rate: 0.0002
+          batch_size: 16
+          gradient_checkpointing: true
+          seeds:
+          - 42
+        model:
+          name: qwen3-1.7b
+          model_id: Qwen/Qwen3-1.7B-Base
+          max_seq_len: 2048
+    outs:
+    - path: results/qwen3-1.7b/finetune_lora_original.json
+      hash: md5
+      md5: f4ecfc4f1c257d0f15b388c27797e86e
+      size: 65885
+  judge_geval@qwen3-1.7b:
+    cmd: uv run python -m medllm.evaluation.geval model=qwen3-1.7b --runs 
+      lora_original
+    deps:
+    - path: data/processed/finetune_qwen3-1.7b
+      hash: md5
+      md5: c125756b0e859b981827356775578dc4.dir
+      size: 568233509
+      nfiles: 15
+    - path: results/qwen3-1.7b/finetune_lora_original.json
+      hash: md5
+      md5: f4ecfc4f1c257d0f15b388c27797e86e
+      size: 65885
+    - path: src/medllm/evaluation/generation.py
+      hash: md5
+      md5: 907a60033e697fdad4ec7727787dfde7
+      size: 2642
+    - path: src/medllm/evaluation/geval.py
+      hash: md5
+      md5: f42f190e57fe8ecb172843778f5dc1a9
+      size: 16886
+    params:
+      configs/config.yaml:
+        geval.judge_model: Qwen/Qwen3.8-27B
+        geval.max_new_tokens: 256
+        geval.num_examples:
+    outs:
+    - path: results/qwen3-1.7b/geval.json
+      hash: md5
+      md5: da89cba14766c73e8d31712fc4d2ab77
+      size: 6080
+  evaluate_benchmarks@qwen3-1.7b:
+    cmd: uv run python -m medllm.evaluation.benchmarks model=qwen3-1.7b --runs 
+      lora_original
+    deps:
+    - path: results/qwen3-1.7b/baseline.json
+      hash: md5
+      md5: 34bcc4899aaf5a721ca5823aa61d9021
+      size: 64920
+    - path: results/qwen3-1.7b/finetune_lora_original.json
+      hash: md5
+      md5: f4ecfc4f1c257d0f15b388c27797e86e
+      size: 65885
+    - path: src/medllm/evaluation/benchmarks.py
+      hash: md5
+      md5: caf0bbd40f51ff33bd63d60247d298c6
+      size: 6040
+    - path: src/medllm/evaluation/lm_eval_tasks
+      hash: md5
+      md5: 2a172c0af5e8a534e90d05354075d9b9.dir
+      size: 1842
+      nfiles: 2
+    params:
+      configs/config.yaml:
+        benchmarks:
+          tasks:
+          - medqa_4options
+          - medmcqa
+          - pubmedqa_test
+          - mmlu_anatomy
+          - mmlu_clinical_knowledge
+          - mmlu_college_biology
+          - mmlu_college_medicine
+          - mmlu_medical_genetics
+          - mmlu_professional_medicine
+          num_fewshot: 0
+          batch_size: 16
+        finetune_data.system_prompt: You are a medical assistant. Answer medical
+          questions accurately.
+    outs:
+    - path: results/qwen3-1.7b/benchmarks.json
+      hash: md5
+      md5: 8d3a2d8d17b1812e87b360e300cc8817
+      size: 7427
+  report:
+    cmd: uv run python -m medllm.reporting.report --models qwen3-1.7b 
+      --data-stats data/processed/finetune_qwen3-1.7b/stats.json
+    deps:
+    - path: data/processed/finetune_qwen3-1.7b/stats.json
+      hash: md5
+      md5: 85d7683b8eda56a3ab51406d81d84c52
+      size: 1139
+    - path: results/qwen3-1.7b/baseline.json
+      hash: md5
+      md5: 34bcc4899aaf5a721ca5823aa61d9021
+      size: 64920
+    - path: results/qwen3-1.7b/benchmarks.json
+      hash: md5
+      md5: 8d3a2d8d17b1812e87b360e300cc8817
+      size: 7427
+    - path: results/qwen3-1.7b/finetune_lora_original.json
+      hash: md5
+      md5: f4ecfc4f1c257d0f15b388c27797e86e
+      size: 65885
+    - path: results/qwen3-1.7b/geval.json
+      hash: md5
+      md5: da89cba14766c73e8d31712fc4d2ab77
+      size: 6080
+    - path: src/medllm/reporting/report.py
+      hash: md5
+      md5: 493bc4e20e0b2b3ca38c871b75989308
+      size: 14239
+    outs:
+    - path: reports/comparison.md
+      hash: md5
+      md5: 5272968d0dc7a7e91bc31828673aba1d
+      size: 2280

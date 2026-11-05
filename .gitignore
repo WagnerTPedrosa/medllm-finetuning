@@ -33,10 +33,15 @@ Thumbs.db
 # Hugging Face datasets caches
 data/processed/**/cache-*.arrow
 
-# Tokenized pretraining corpus (several GB, rebuilt by src/corpus.py)
+# Raw downloads and intermediate data (rebuilt by pipelines/data/dvc.yaml)
+data/raw/
+data/interim/
+
+# Tokenized pretraining corpus (several GB, rebuilt by pipelines/data/dvc.yaml)
 data/processed/pubmed_*/
 
-# Multitask fine-tuning data (rebuilt by src/multitask.py)
+# Fine-tuning data (rebuilt by pipelines/data/dvc.yaml; multitask_v1 is the archived GPT-2 data)
+data/processed/finetune_*/
 data/processed/multitask_*/
 
 # Training logs (metrics and curves are tracked in MLflow)

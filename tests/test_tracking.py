@@ -4,16 +4,13 @@ from types import SimpleNamespace
 import mlflow
 import mlflow.transformers as mlflow_transformers
 import pytest
-from datasets import Dataset
 
-from src.config import Config
-from src.modeling import resolve_model_source
-from src.tracking import (
+from medllm.config import MultitaskConfig
+from medllm.tracking import (
     configure_tracking,
     git_tags,
     log_best_model,
     log_evaluation,
-    log_search_inputs,
     start_stage_run,
 )
 
@@ -32,7 +29,7 @@ def test_git_tags_is_empty_outside_a_repository(tmp_path: Path) -> None:
 
 
 def test_trial_runs_are_nested_under_the_search_run(
-    config: Config, tracking_store: Path
+    config: MultitaskConfig, tracking_store: Path
 ) -> None:
     configure_tracking(config)
 
@@ -49,23 +46,8 @@ def test_trial_runs_are_nested_under_the_search_run(
     assert "git_commit" in parent_tags
 
 
-def test_log_search_inputs_records_config_and_datasets(
-    config: Config, tracking_store: Path
-) -> None:
-    configure_tracking(config)
-    dataset = Dataset.from_dict({"prompt": ["Question: a"], "completion": ["b"]})
-
-    with start_stage_run("finetune", "grid-search", config) as parent:
-        log_search_inputs(dataset, dataset, config)
-
-    saved = mlflow.get_run(parent.info.run_id)
-    artifacts = {item.path for item in mlflow.MlflowClient().list_artifacts(parent.info.run_id)}
-    assert "config.json" in artifacts
-    assert len(saved.inputs.dataset_inputs) == 2
-
-
 def test_log_best_model_registers_a_version_with_alias(
-    config: Config, tracking_store: Path, monkeypatch: pytest.MonkeyPatch
+    config: MultitaskConfig, tracking_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     configure_tracking(config)
     client = mlflow.MlflowClient()
@@ -97,7 +79,7 @@ def test_log_best_model_registers_a_version_with_alias(
     )
 
 
-def test_log_evaluation_records_prefixed_metrics(config: Config, tracking_store: Path) -> None:
+def test_log_evaluation_records_prefixed_metrics(config: MultitaskConfig, tracking_store: Path) -> None:
     configure_tracking(config)
 
     run_id = log_evaluation(
@@ -110,30 +92,9 @@ def test_log_evaluation_records_prefixed_metrics(config: Config, tracking_store:
     assert saved.data.tags["evaluated_model"] == "checkpoints/gpt2-medtext-best"
 
 
-def test_resolve_model_source_keeps_hub_ids_and_local_paths() -> None:
-    assert resolve_model_source("openai-community/gpt2") == "openai-community/gpt2"
-    assert resolve_model_source("checkpoints/gpt2-medtext-best") == "checkpoints/gpt2-medtext-best"
-
-
-def test_resolve_model_source_downloads_logged_model_weights(
-    config: Config, tracking_store: Path
-) -> None:
-    configure_tracking(config)
-    packaged = tracking_store / "packaged"
-    (packaged / "model").mkdir(parents=True)
-    (packaged / "model" / "config.json").write_text('{"model_type": "gpt2"}')
-    with mlflow.start_run() as run:
-        mlflow.log_artifacts(str(packaged), "packaged")
-
-    local_dir = Path(resolve_model_source(f"runs:/{run.info.run_id}/packaged"))
-
-    assert local_dir.name == "model"
-    assert (local_dir / "config.json").exists()
-
-
 @pytest.mark.parametrize("alias", ["latest", "Latest"])
 def test_log_best_model_rejects_reserved_alias_before_logging(
-    alias: str, config: Config, tracking_store: Path, monkeypatch: pytest.MonkeyPatch
+    alias: str, config: MultitaskConfig, tracking_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[object] = []
     monkeypatch.setattr(mlflow_transformers, "log_model", lambda **kwargs: calls.append(kwargs))
@@ -145,3 +106,26 @@ def test_log_best_model_rejects_reserved_alias_before_logging(
         log_best_model(run.info.run_id, tracking_store, "test-sft", alias)
 
     assert calls == []
+
+
+def test_configure_tracking_uses_new_name_after_experiment_deleted(
+    config: MultitaskConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_uri = mlflow.get_tracking_uri()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{tmp_path / 'tracking.db'}")
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "deleted-test")
+
+    try:
+        configure_tracking(config)
+        old_experiment = mlflow.get_experiment_by_name("deleted-test")
+        mlflow.MlflowClient().delete_experiment(old_experiment.experiment_id)
+
+        with pytest.warns(RuntimeWarning, match="using 'deleted-test-rerun'"):
+            configure_tracking(config)
+        with mlflow.start_run() as run:
+            selected = mlflow.get_experiment(run.info.experiment_id)
+            assert selected.name == "deleted-test-rerun"
+        assert mlflow.get_experiment(old_experiment.experiment_id).lifecycle_stage == "deleted"
+    finally:
+        mlflow.set_tracking_uri(old_uri)

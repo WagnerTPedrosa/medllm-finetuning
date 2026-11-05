@@ -1,0 +1,128 @@
+# Data pipeline: builds every dataset the training pipeline reads.
+#
+#   raw (downloaded) -> interim (model-independent) -> processed (per base model)
+#
+#   download                   the fine-tuning datasets at pinned revisions -> data/raw/
+#   preprocess                 prompt/completion examples, official tests apart -> data/interim/finetune/preprocessed/
+#   split                      validation sets held out -> data/interim/finetune/splits/
+#   filter_length@<model>      examples that fit the model's context -> data/processed/finetune_<model>/
+#   clean_corpus               PubMed papers decontaminated, cleaned, split -> data/interim/pubmed/
+#   tokenize_corpus@<model>    tokenized and packed blocks -> data/processed/pubmed_<model>/
+#
+# The fine-tuning data is JSONL (one file per split, each example once); the
+# training mixture is built from it when fine-tuning starts (the `mixture`
+# config section). A new base model only reruns the @<model> stages.
+#
+#   uv run dvc repro pipelines/data/dvc.yaml:filter_length@qwen3-1.7b
+#   uv run dvc repro pipelines/data/dvc.yaml:tokenize_corpus@qwen3-1.7b
+#   uv run dvc status pipelines/data/dvc.yaml        # what would run, and why
+#
+# The PubMed papers themselves are downloaded by pubmed-extractor, outside
+# this repository (`corpus.raw_dir`), so DVC cannot see when they change:
+# delete data/interim/pubmed after a new download.
+# Every stage runs from the repository root (wdir).
+
+vars:
+  - models:
+      - qwen3-1.7b
+
+stages:
+  download:
+    wdir: ../..
+    cmd: uv run python -m medllm.data.download
+    deps:
+      - src/medllm/data/download.py
+    params:
+      - configs/config.yaml:
+          - datasets
+    outs:
+      - data/raw:
+          cache: false
+
+  preprocess:
+    wdir: ../..
+    cmd: uv run python -m medllm.data.finetune_data preprocess
+    deps:
+      - src/medllm/data/finetune_data.py
+      - src/medllm/data/preprocessing.py
+      - src/medllm/data/download.py
+      - data/raw
+      - data/benchmarks/pubmedqa_test_ground_truth.json
+    params:
+      - configs/config.yaml:
+          - finetune_data.system_prompt
+    outs:
+      - data/interim/finetune/preprocessed:
+          cache: false
+
+  split:
+    wdir: ../..
+    cmd: uv run python -m medllm.data.finetune_data split
+    deps:
+      - src/medllm/data/finetune_data.py
+      - src/medllm/data/splits.py
+      - data/interim/finetune/preprocessed
+    params:
+      - configs/config.yaml:
+          - seed
+          - finetune_data.medtext_holdout_fraction
+          - finetune_data.pubmedqa_validation_size
+          - finetune_data.medmcqa_validation_size
+          - finetune_data.medqa_validation_size
+    outs:
+      - data/interim/finetune/splits:
+          cache: false
+
+  filter_length:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.data.finetune_data filter_length model=${item}
+      deps:
+        - src/medllm/data/finetune_data.py
+        - src/medllm/data/splits.py
+        - data/interim/finetune/splits
+      params:
+        - configs/model/${item}.yaml:
+            - model.model_id
+            - model.max_seq_len
+      outs:
+        - data/processed/finetune_${item}:
+            cache: false
+
+  clean_corpus:
+    wdir: ../..
+    cmd: uv run python -m medllm.data.corpus clean
+    deps:
+      - src/medllm/data/corpus.py
+    params:
+      - configs/config.yaml:
+          - seed
+          - corpus.raw_dir
+          - corpus.validation_fraction
+          - corpus.remove_boilerplate_sections
+          - corpus.remove_citations
+          - corpus.benchmark_dataset_id
+          - corpus.benchmark_subset
+    outs:
+      - data/interim/pubmed:
+          cache: false
+
+  tokenize_corpus:
+    foreach: ${models}
+    do:
+      wdir: ../..
+      cmd: uv run python -m medllm.data.corpus tokenize model=${item}
+      deps:
+        - src/medllm/data/corpus.py
+        - data/interim/pubmed
+      params:
+        # Order of the documents before packing
+        - configs/config.yaml:
+            - seed
+        - configs/model/${item}.yaml:
+            - model.model_id
+            - model.max_seq_len
+      outs:
+        - data/processed/pubmed_${item}:
+            cache: false

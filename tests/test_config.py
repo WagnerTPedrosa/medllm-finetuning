@@ -2,46 +2,15 @@ from pathlib import Path
 
 import pytest
 
-from src.config import (
-    Config,
+from medllm.config import (
     FloatRange,
     MultitaskConfig,
     PretrainConfig,
     compose_config,
-    load_config,
     load_multitask_config,
     load_pretrain_config,
     parse_search_space,
 )
-
-CONFIG_PATH = Path("configs/gpt2_medtext.yaml")
-
-
-def test_load_config_reads_project_config() -> None:
-    config: Config = load_config(CONFIG_PATH)
-
-    assert config.seed == 42
-    assert config.mlflow.tracking_uri == "sqlite:///mlflow.db"
-    assert config.mlflow.experiment_name == "gpt2-medtext-fine-tuned"
-    assert config.mlflow.registered_model_name == "gpt2-medtext-sft"
-    assert config.mlflow.log_system_metrics is True
-    assert config.model.model_id == "openai-community/gpt2"
-    assert config.training.max_epochs == 20
-    assert config.optuna.n_trials == 20
-
-
-def test_load_config_parses_learning_rates_as_floats() -> None:
-    config: Config = load_config(CONFIG_PATH)
-
-    learning_rates: list[float] = config.grid_search.param_grid["learning_rate"]
-
-    assert learning_rates == [1e-5, 2e-5, 5e-5]
-    assert all(isinstance(rate, float) for rate in learning_rates)
-
-
-def test_load_config_raises_for_missing_file(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
-        load_config(tmp_path / "missing.yaml")
 
 
 def test_parse_search_space_reads_ranges_and_choices() -> None:
@@ -64,11 +33,11 @@ def test_parse_search_space_rejects_non_numeric_range() -> None:
 MODEL_FILES: list[Path] = sorted(Path("configs/model").glob("*.yaml"))
 
 
-def test_compose_config_defaults_to_gpt2() -> None:
+def test_compose_config_defaults_to_qwen() -> None:
     raw = compose_config()
 
-    assert raw["model"]["name"] == "gpt2"
-    assert raw["results_dir"] == "results/gpt2"
+    assert raw["model"]["name"] == "qwen3-1.7b"
+    assert raw["results_dir"] == "results/qwen3-1.7b"
 
 
 @pytest.mark.parametrize("model_file", MODEL_FILES, ids=[path.stem for path in MODEL_FILES])
@@ -90,9 +59,23 @@ def test_load_pretrain_config_names_mlflow_and_paths_after_the_model() -> None:
     assert config.model.model_id == "Qwen/Qwen3-1.7B-Base"
     assert config.mlflow.experiment_name == "qwen3-1.7b-pubmed-pretrain"
     assert config.mlflow.registered_model_name == "qwen3-1.7b-pubmed-dapt"
-    assert config.corpus.processed_dir == "data/processed/pubmed_v1_qwen3-1.7b"
+    assert config.corpus.processed_dir == "data/processed/pubmed_qwen3-1.7b"
     assert config.pretraining.output_dir == "checkpoints/pretrain/qwen3-1.7b-pubmed-dapt"
     assert config.results_dir == "results/qwen3-1.7b"
+
+
+def test_load_multitask_config_reads_the_lora_settings() -> None:
+    finetune = load_multitask_config().finetune
+
+    assert finetune.method == "lora"
+    assert finetune.seeds == [42]
+    assert finetune.lora.r == 16
+    assert "q_proj" in finetune.lora.target_modules
+
+
+def test_load_multitask_config_rejects_an_unknown_method() -> None:
+    with pytest.raises(ValueError, match="finetune.method"):
+        load_multitask_config(["finetune.method=qlora"])
 
 
 def test_load_pretrain_config_expands_the_corpus_directory() -> None:
@@ -109,13 +92,22 @@ def test_load_multitask_config_points_dapt_at_the_pretrained_model() -> None:
     assert config.finetune.dapt_model_id == "models:/qwen3-1.7b-pubmed-dapt@candidate"
 
 
-def test_fine_tuning_data_is_the_same_for_every_model() -> None:
-    gpt2: MultitaskConfig = load_multitask_config(["model=gpt2"])
+def test_fine_tuning_data_is_filtered_with_the_model_tokenizer() -> None:
     qwen: MultitaskConfig = load_multitask_config(["model=qwen3-1.7b"])
 
-    assert gpt2.data_filter == qwen.data_filter
-    assert gpt2.multitask == qwen.multitask
-    assert gpt2.training.max_epochs == gpt2.multitask.mixture_epochs
+    assert qwen.data_filter.tokenizer == qwen.model.model_id
+    assert qwen.data_filter.max_seq_len == qwen.model.max_seq_len
+    assert qwen.finetune_data.processed_dir == "data/processed/finetune_qwen3-1.7b"
+    assert qwen.training.max_epochs == qwen.mixture.epochs
+
+
+def test_gpt2_keeps_the_archived_v1_data() -> None:
+    gpt2: MultitaskConfig = load_multitask_config(["model=gpt2"])
+
+    assert gpt2.finetune_data.processed_dir == "data/processed/multitask_v1"
+    assert load_pretrain_config(["model=gpt2"]).corpus.processed_dir == "data/processed/pubmed_v1_gpt2"
+    assert gpt2.data_filter.tokenizer == "openai-community/gpt2"
+    assert gpt2.finetune.method == "full"
 
 
 def test_load_multitask_config_merges_the_model_search_range_into_the_sweep() -> None:
@@ -123,3 +115,34 @@ def test_load_multitask_config_merges_the_model_search_range_into_the_sweep() ->
 
     assert sweep.search_space["learning_rate"] == FloatRange(low=5e-6, high=1e-4, log=True)
     assert sweep.search_space["batch_size"] == [8, 16, 32]
+
+
+def test_every_raw_dataset_is_pinned_to_a_revision() -> None:
+    config: MultitaskConfig = load_multitask_config()
+
+    assert set(config.datasets.sources) == {"medtext", "pubmedqa_labeled", "pubmedqa_artificial", "medmcqa", "medqa"}
+    assert config.datasets.sources["pubmedqa_artificial"].subset == "pqa_artificial"
+    assert all(len(source.revision) == 40 for source in config.datasets.sources.values())
+
+
+def test_qwen3_1_7b_keeps_its_evaluation_and_batches_unchanged() -> None:
+    config = load_multitask_config(["model=qwen3-1.7b"])
+
+    assert config.model.eval_dtype == "float32"
+    assert config.finetune.micro_batch_size is None
+    assert config.finetune.lora.modules_to_save == ["embed_tokens"]
+
+
+def test_qwen3_8_27b_fits_one_gpu_and_adapts_its_linear_attention_layers() -> None:
+    config = load_multitask_config(["model=qwen3.8-27b"])
+
+    assert config.model.model_id == "Qwen/Qwen3.8-27B"
+    # bf16 weights (~54 GB): float32 would not fit on the GPU
+    assert config.model.eval_dtype == "bfloat16"
+    assert config.finetune.batch_size == 16
+    assert config.finetune.batch_size % config.finetune.micro_batch_size == 0
+    assert config.finetune.gradient_checkpointing is True
+    # Gated DeltaNet projections, besides the attention and MLP ones
+    assert {"in_proj_qkv", "in_proj_z", "out_proj", "q_proj", "down_proj"} <= set(config.finetune.lora.target_modules)
+    # An instruct model already writes its chat tokens: no embeddings to train
+    assert config.finetune.lora.modules_to_save == []

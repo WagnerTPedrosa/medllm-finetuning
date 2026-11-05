@@ -1,0 +1,206 @@
+schema: '2.0'
+stages:
+  download:
+    cmd: uv run python -m medllm.data.download
+    deps:
+    - path: src/medllm/data/download.py
+      hash: md5
+      md5: b96111d1c632ba68af7682d74e27a4a1
+      size: 3226
+    params:
+      configs/config.yaml:
+        datasets:
+          raw_dir: data/raw
+          sources:
+            medtext:
+              dataset_id: BI55/MedText
+              subset:
+              revision: 96d57f97ae609ff352aa97609a8d612db2d1c0f1
+            pubmedqa_labeled:
+              dataset_id: qiaojin/PubMedQA
+              subset: pqa_labeled
+              revision: 9001f2853fb87cab8d220904e0de81ac6973b318
+            pubmedqa_artificial:
+              dataset_id: qiaojin/PubMedQA
+              subset: pqa_artificial
+              revision: 9001f2853fb87cab8d220904e0de81ac6973b318
+            medmcqa:
+              dataset_id: openlifescienceai/medmcqa
+              subset:
+              revision: 91c6572c454088bf71b679ad90aa8dffcd0d5868
+            medqa:
+              dataset_id: GBaker/MedQA-USMLE-4-options
+              subset:
+              revision: 0fb93dd23a7339b6dcd27e241cb9b5eca62d4d18
+    outs:
+    - path: data/raw
+      hash: md5
+      md5: 30258837c226aca07659cff19f48a848.dir
+      size: 505185087
+      nfiles: 9
+  build_examples:
+    cmd: uv run python -m src.multitask build_examples
+    deps:
+    - path: data/benchmarks/pubmedqa_test_ground_truth.json
+      hash: md5
+      md5: f52c9d953b2833b43486fb1c00f1737f
+      size: 11414
+    - path: data/raw
+      hash: md5
+      md5: 30258837c226aca07659cff19f48a848.dir
+      size: 505185087
+      nfiles: 9
+    - path: src/dataset_preparation.py
+      hash: md5
+      md5: 49d09b723c29d83133c9f56c4fa72c4a
+      size: 6794
+    - path: src/formatting.py
+      hash: md5
+      md5: 77b59b77b0edc3d7bd95cdb921620863
+      size: 1324
+    - path: src/multitask.py
+      hash: md5
+      md5: 96a2fe9ea35569758674b6d8352a6e50
+      size: 29071
+    outs:
+    - path: data/interim/multitask/examples
+      hash: md5
+      md5: bb94d8c7f9e218aef4f5b4eff8678fee.dir
+      size: 512800604
+      nfiles: 9
+  split:
+    cmd: uv run python -m medllm.data.finetune_data split
+    deps:
+    - path: data/interim/finetune/preprocessed
+      hash: md5
+      md5: 4a7c55f2f71b6bf0df26aa8591ce74a3.dir
+      size: 567898281
+      nfiles: 9
+    - path: src/medllm/data/finetune_data.py
+      hash: md5
+      md5: 769d8da236d25ad9fdf7d960826c1835
+      size: 6302
+    - path: src/medllm/data/splits.py
+      hash: md5
+      md5: f6d39df52b46b008a1cb49aca8a7ff5b
+      size: 7202
+    params:
+      configs/config.yaml:
+        finetune_data.medmcqa_validation_size: 150
+        finetune_data.medqa_validation_size: 150
+        finetune_data.medtext_holdout_fraction: 0.2
+        finetune_data.pubmedqa_validation_size: 50
+        seed: 42
+    outs:
+    - path: data/interim/finetune/splits
+      hash: md5
+      md5: a2cd6dc172d5aa58e83d08f24bf5c250.dir
+      size: 567898175
+      nfiles: 14
+  filter_length@qwen3-1.7b:
+    cmd: uv run python -m medllm.data.finetune_data filter_length 
+      model=qwen3-1.7b
+    deps:
+    - path: data/interim/finetune/splits
+      hash: md5
+      md5: a2cd6dc172d5aa58e83d08f24bf5c250.dir
+      size: 567898175
+      nfiles: 14
+    - path: src/medllm/data/finetune_data.py
+      hash: md5
+      md5: 769d8da236d25ad9fdf7d960826c1835
+      size: 6302
+    - path: src/medllm/data/splits.py
+      hash: md5
+      md5: f6d39df52b46b008a1cb49aca8a7ff5b
+      size: 7202
+    params:
+      configs/model/qwen3-1.7b.yaml:
+        model.max_seq_len: 2048
+        model.model_id: Qwen/Qwen3-1.7B-Base
+    outs:
+    - path: data/processed/finetune_qwen3-1.7b
+      hash: md5
+      md5: c125756b0e859b981827356775578dc4.dir
+      size: 568233509
+      nfiles: 15
+  preprocess:
+    cmd: uv run python -m medllm.data.finetune_data preprocess
+    deps:
+    - path: data/benchmarks/pubmedqa_test_ground_truth.json
+      hash: md5
+      md5: f52c9d953b2833b43486fb1c00f1737f
+      size: 11414
+    - path: data/raw
+      hash: md5
+      md5: 30258837c226aca07659cff19f48a848.dir
+      size: 505185087
+      nfiles: 9
+    - path: src/medllm/data/download.py
+      hash: md5
+      md5: b96111d1c632ba68af7682d74e27a4a1
+      size: 3226
+    - path: src/medllm/data/finetune_data.py
+      hash: md5
+      md5: 769d8da236d25ad9fdf7d960826c1835
+      size: 6302
+    - path: src/medllm/data/preprocessing.py
+      hash: md5
+      md5: 5a0518d1c92a8e08f1005226dc7cf4b4
+      size: 16597
+    params:
+      configs/config.yaml:
+        finetune_data.system_prompt: You are a medical assistant. Answer medical
+          questions accurately.
+    outs:
+    - path: data/interim/finetune/preprocessed
+      hash: md5
+      md5: 4a7c55f2f71b6bf0df26aa8591ce74a3.dir
+      size: 567898281
+      nfiles: 9
+  clean_corpus:
+    cmd: uv run python -m medllm.data.corpus clean
+    deps:
+    - path: src/medllm/data/corpus.py
+      hash: md5
+      md5: 40d4c8e23a69152ddb155e2bd70e675a
+      size: 15477
+    params:
+      configs/config.yaml:
+        corpus.benchmark_dataset_id: qiaojin/PubMedQA
+        corpus.benchmark_subset: pqa_labeled
+        corpus.raw_dir: ~/Documents/Projects/pubmed-corpus
+        corpus.remove_boilerplate_sections: true
+        corpus.remove_citations: true
+        corpus.validation_fraction: 0.001
+        seed: 42
+    outs:
+    - path: data/interim/pubmed
+      hash: md5
+      md5: 269c4ca75ed01140b1c8c5d78b81687a.dir
+      size: 13504401592
+      nfiles: 4
+  tokenize_corpus@qwen3-1.7b:
+    cmd: uv run python -m medllm.data.corpus tokenize model=qwen3-1.7b
+    deps:
+    - path: data/interim/pubmed
+      hash: md5
+      md5: 269c4ca75ed01140b1c8c5d78b81687a.dir
+      size: 13504401592
+      nfiles: 4
+    - path: src/medllm/data/corpus.py
+      hash: md5
+      md5: 40d4c8e23a69152ddb155e2bd70e675a
+      size: 15477
+    params:
+      configs/config.yaml:
+        seed: 42
+      configs/model/qwen3-1.7b.yaml:
+        model.max_seq_len: 2048
+        model.model_id: Qwen/Qwen3-1.7B-Base
+    outs:
+    - path: data/processed/pubmed_qwen3-1.7b
+      hash: md5
+      md5: 900dae823333742d86b3c3368dca0574.dir
+      size: 24595461350
+      nfiles: 57
