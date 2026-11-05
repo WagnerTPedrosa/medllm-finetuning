@@ -19,7 +19,12 @@ from medllm.data.finetune_data import load_finetune_data
 from medllm.data.preprocessing import PUBMEDQA_DECISIONS, SFT_COLUMNS
 from medllm.evaluation.choices import evaluate_choice_task, evaluate_open_choice_task
 from medllm.evaluation.loss import evaluate
-from medllm.modeling import get_device, load_causal_lm, resolve_model_source
+from medllm.modeling import (
+    get_device,
+    load_causal_lm,
+    parse_dtype,
+    resolve_model_source,
+)
 
 # Scored by picking the most likely answer: PubMedQA among its fixed decisions,
 # the open MedMCQA and MedQA questions among each question's own options
@@ -90,6 +95,6 @@ def evaluate_on_tasks(
 def evaluate_model(model_id: str, config: MultitaskConfig, prefix: str = "test") -> TaskEvaluation:
     """Load a model (Hub id, path or MLflow URI) and score it with `evaluate_on_tasks`."""
     source: str = resolve_model_source(model_id)
-    model = load_causal_lm(source).to(get_device())
+    model = load_causal_lm(source, parse_dtype(config.model.eval_dtype)).to(get_device())
     tokenizer = AutoTokenizer.from_pretrained(source)
     return evaluate_on_tasks(model, tokenizer, load_finetune_data(config.finetune_data.processed_dir), config, prefix)

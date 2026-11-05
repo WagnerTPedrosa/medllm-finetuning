@@ -8,6 +8,7 @@ from medllm.training.finetune import (
     build_sft_config,
     epoch_metrics,
     finetune_stage,
+    gradient_accumulation,
     steps_per_epoch,
     summarize_seeds,
 )
@@ -100,3 +101,40 @@ def test_base_model_id_rejects_an_unknown_base() -> None:
 
 def test_finetune_stage_names_the_method_and_the_starting_model() -> None:
     assert finetune_stage("lora", "original") == "finetune_lora_original"
+
+
+def test_gradient_accumulation_keeps_the_whole_batch_without_a_micro_batch() -> None:
+    assert gradient_accumulation(batch_size=16, micro_batch_size=None) == (16, 1)
+
+
+def test_gradient_accumulation_splits_the_batch_into_micro_batches() -> None:
+    assert gradient_accumulation(batch_size=16, micro_batch_size=2) == (2, 8)
+
+
+def test_gradient_accumulation_rejects_a_batch_that_does_not_split_evenly() -> None:
+    with pytest.raises(ValueError, match="micro_batch_size"):
+        gradient_accumulation(batch_size=16, micro_batch_size=3)
+
+
+def test_build_sft_config_trains_the_whole_batch_at_once_by_default(tmp_path: Path) -> None:
+    sft_config = build_sft_config(load(), tmp_path, seed=1, epoch_steps=10)
+
+    assert sft_config.gradient_accumulation_steps == 1
+
+
+def test_build_sft_config_accumulates_micro_batches_up_to_the_batch_size(tmp_path: Path) -> None:
+    config = load_multitask_config(["model=qwen3.8-27b"])
+
+    sft_config = build_sft_config(config, tmp_path, seed=1, epoch_steps=10)
+
+    assert sft_config.per_device_train_batch_size * sft_config.gradient_accumulation_steps == config.finetune.batch_size
+    assert sft_config.per_device_train_batch_size == config.finetune.micro_batch_size
+
+
+def test_build_sft_config_accumulates_trial_batches_too(tmp_path: Path) -> None:
+    config = load_multitask_config(["model=qwen3.8-27b"])
+    hyperparameters = {"learning_rate": 1e-4, "batch_size": 32, "lr_scheduler_type": "constant", "warmup_ratio": 0.05}
+
+    sft_config = build_sft_config(config, tmp_path, seed=1, epoch_steps=10, hyperparameters=hyperparameters)
+
+    assert sft_config.per_device_train_batch_size * sft_config.gradient_accumulation_steps == 32

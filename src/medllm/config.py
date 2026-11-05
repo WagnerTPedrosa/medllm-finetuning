@@ -38,10 +38,16 @@ class FloatRange:
 SearchSpace = dict[str, FloatRange | list[HyperparameterValue]]
 
 
+DEFAULT_EVAL_DTYPE = "float32"
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     model_id: str
     max_seq_len: int
+    # Dtype of the weights when the model is evaluated: float32, or bfloat16
+    # for models too large to evaluate in float32 on one GPU
+    eval_dtype: str = DEFAULT_EVAL_DTYPE
 
 
 @dataclass(frozen=True)
@@ -270,6 +276,9 @@ class FinetuneConfig:
     lora: LoraSettings
     output_dir: str
     dapt_model_id: str
+    # Examples per forward pass, accumulated up to `batch_size` (None: the whole
+    # batch at once). Large models only fit with small micro-batches.
+    micro_batch_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -358,7 +367,11 @@ def load_multitask_config(overrides: list[str] | None = None) -> MultitaskConfig
             registered_model_name=raw["mlflow"]["multitask_registered_model"],
             log_system_metrics=raw["mlflow"]["log_system_metrics"],
         ),
-        model=ModelConfig(model_id=raw["model"]["model_id"], max_seq_len=raw["model"]["max_seq_len"]),
+        model=ModelConfig(
+            model_id=raw["model"]["model_id"],
+            max_seq_len=raw["model"]["max_seq_len"],
+            eval_dtype=raw["model"].get("eval_dtype", DEFAULT_EVAL_DTYPE),
+        ),
         training=TrainingConfig(**raw["training"]),
         data_filter=DataFilterConfig(**raw["data_filter"]),
         datasets=DatasetsConfig(

@@ -60,6 +60,27 @@ def steps_per_epoch(examples_per_epoch: int, batch_size: int) -> int:
     return math.ceil(examples_per_epoch / batch_size)
 
 
+def gradient_accumulation(batch_size: int, micro_batch_size: int | None) -> tuple[int, int]:
+    """Examples per forward pass and passes per optimizer step for a batch.
+
+    Args:
+        batch_size: Examples per optimizer step.
+        micro_batch_size: Examples per forward pass (None: the whole batch).
+
+    Returns:
+        The per-device batch size and the gradient accumulation steps; their
+        product is `batch_size`.
+
+    Raises:
+        ValueError: If `batch_size` is not a multiple of `micro_batch_size`.
+    """
+    if micro_batch_size is None:
+        return batch_size, 1
+    if batch_size % micro_batch_size != 0:
+        raise ValueError(f"batch_size {batch_size} is not a multiple of micro_batch_size {micro_batch_size}")
+    return micro_batch_size, batch_size // micro_batch_size
+
+
 def default_hyperparameters(config: MultitaskConfig) -> Hyperparameters:
     """Hyperparameters of the full runs: `finetune` plus the schedule from `training`."""
     return {
@@ -96,11 +117,13 @@ def build_sft_config(
         The SFTTrainer configuration (model selection on `eval_combined_loss`).
     """
     values: Hyperparameters = {**default_hyperparameters(config), **(hyperparameters or {})}
+    micro_batch_size, accumulation_steps = gradient_accumulation(values["batch_size"], config.finetune.micro_batch_size)
     return SFTConfig(
         output_dir=str(output_dir),
         num_train_epochs=1,
         learning_rate=values["learning_rate"],
-        per_device_train_batch_size=values["batch_size"],
+        per_device_train_batch_size=micro_batch_size,
+        gradient_accumulation_steps=accumulation_steps,
         per_device_eval_batch_size=config.training.eval_batch_size,
         weight_decay=values["weight_decay"],
         max_grad_norm=config.training.max_grad_norm,

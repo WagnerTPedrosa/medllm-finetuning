@@ -12,6 +12,7 @@ from medllm.chat import stop_token_ids
 from medllm.config import MultitaskConfig
 
 MLFLOW_URI_PREFIXES = ("models:/", "runs:/")
+DTYPES: dict[str, torch.dtype] = {"float32": torch.float32, "bfloat16": torch.bfloat16}
 
 
 def resolve_model_source(model_id: str) -> str:
@@ -64,6 +65,17 @@ def weights_dtype(method: str) -> torch.dtype:
         `torch.bfloat16` for LoRA, `torch.float32` otherwise.
     """
     return torch.bfloat16 if method == "lora" else torch.float32
+
+
+def parse_dtype(name: str) -> torch.dtype:
+    """The torch dtype named in the configuration (`float32` or `bfloat16`).
+
+    Raises:
+        ValueError: If the name is not one of `DTYPES`.
+    """
+    if name not in DTYPES:
+        raise ValueError(f"dtype must be one of {list(DTYPES)}, got {name!r}")
+    return DTYPES[name]
 
 
 def load_causal_lm(model_id: str, dtype: torch.dtype = torch.float32) -> PreTrainedModel:

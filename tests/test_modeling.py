@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import mlflow
+import pytest
 import torch
 from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import AutoTokenizer, GPT2Config, GPT2LMHeadModel
@@ -10,6 +11,7 @@ from medllm.modeling import (
     build_peft_config,
     load_causal_lm,
     merge_lora,
+    parse_dtype,
     resolve_model_source,
     set_end_of_turn,
     weights_dtype,
@@ -108,3 +110,13 @@ def test_merged_lora_model_matches_the_adapter_model(tmp_path: Path) -> None:
 
     assert not isinstance(merged, PeftModel)
     assert torch.allclose(merged(inputs).logits, expected, atol=1e-5)
+
+
+def test_parse_dtype_reads_the_supported_dtypes() -> None:
+    assert parse_dtype("float32") == torch.float32
+    assert parse_dtype("bfloat16") == torch.bfloat16
+
+
+def test_parse_dtype_rejects_an_unknown_dtype() -> None:
+    with pytest.raises(ValueError, match="float16"):
+        parse_dtype("float16")

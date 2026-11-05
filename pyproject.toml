@@ -24,6 +24,13 @@ dependencies = [
     "lm-eval>=0.4.9",
 ]
 
+[project.optional-dependencies]
+# Fast Gated DeltaNet kernels (Triton) for Qwen3.5-architecture models such as
+# Qwen3.8-27B; without them transformers falls back to a slow PyTorch path
+linear-attention = [
+    "flash-linear-attention",
+]
+
 [dependency-groups]
 dev = [
     "ipykernel>=7.4.0",

@@ -123,3 +123,26 @@ def test_every_raw_dataset_is_pinned_to_a_revision() -> None:
     assert set(config.datasets.sources) == {"medtext", "pubmedqa_labeled", "pubmedqa_artificial", "medmcqa", "medqa"}
     assert config.datasets.sources["pubmedqa_artificial"].subset == "pqa_artificial"
     assert all(len(source.revision) == 40 for source in config.datasets.sources.values())
+
+
+def test_qwen3_1_7b_keeps_its_evaluation_and_batches_unchanged() -> None:
+    config = load_multitask_config(["model=qwen3-1.7b"])
+
+    assert config.model.eval_dtype == "float32"
+    assert config.finetune.micro_batch_size is None
+    assert config.finetune.lora.modules_to_save == ["embed_tokens"]
+
+
+def test_qwen3_8_27b_fits_one_gpu_and_adapts_its_linear_attention_layers() -> None:
+    config = load_multitask_config(["model=qwen3.8-27b"])
+
+    assert config.model.model_id == "Qwen/Qwen3.8-27B"
+    # bf16 weights (~54 GB): float32 would not fit on the GPU
+    assert config.model.eval_dtype == "bfloat16"
+    assert config.finetune.batch_size == 16
+    assert config.finetune.batch_size % config.finetune.micro_batch_size == 0
+    assert config.finetune.gradient_checkpointing is True
+    # Gated DeltaNet projections, besides the attention and MLP ones
+    assert {"in_proj_qkv", "in_proj_z", "out_proj", "q_proj", "down_proj"} <= set(config.finetune.lora.target_modules)
+    # An instruct model already writes its chat tokens: no embeddings to train
+    assert config.finetune.lora.modules_to_save == []
