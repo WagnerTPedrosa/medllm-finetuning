@@ -50,7 +50,7 @@ from medllm.data.finetune_data import load_finetune_data
 from medllm.evaluation.generation import generate_completion
 from medllm.modeling import load_model
 from medllm.reporting.report import load_stage_result, save_stage_result
-from medllm.tracking import configure_tracking
+from medllm.tracking import configure_tracking, metric_section_name
 from medllm.training.finetune import summarize_seeds
 
 METRIC_PREFIX = "test_medtext_geval"
@@ -325,7 +325,7 @@ def log_seed_scores(
     """
     summary: dict[str, float] = summarize_geval(rows, list(GEVAL_METRICS), METRIC_PREFIX)
     client = mlflow.MlflowClient()
-    client.log_batch(run_id, metrics=[Metric(key, value, 0, 0) for key, value in summary.items()])
+    client.log_batch(run_id, metrics=[Metric(metric_section_name(key), value, 0, 0) for key, value in summary.items()])
     client.set_tag(run_id, "geval_judge", judge_model)
     table = pd.DataFrame(
         {"question": questions, "reference": references, "answer": answers}
@@ -394,8 +394,8 @@ def run_geval(config: MultitaskConfig, runs: list[str]) -> dict[str, Any]:
             summary = summarize_seeds(seed_summaries)
             metrics: list[Metric] = []
             for key, value in summary.items():
-                metrics.append(Metric(f"{key}_mean", value["mean"], 0, 0))
-                metrics.append(Metric(f"{key}_std", value["std"], 0, 0))
+                metrics.append(Metric(metric_section_name(f"{key}_mean"), value["mean"], 0, 0))
+                metrics.append(Metric(metric_section_name(f"{key}_std"), value["std"], 0, 0))
             client.log_batch(finetune["parent_run_id"], metrics=metrics)
             client.set_tag(finetune["parent_run_id"], "geval_judge", config.geval.judge_model)
             summaries[run] = summary

@@ -15,7 +15,7 @@ numbers can be compared with other models. Every model is asked in the chat
 format it is trained on (system prompt, thinking off).
 
 Writes `results/<model>/benchmarks.json` and logs `benchmark_<task>_acc` to the
-MLflow run of each model.
+MLflow run of each model (under `benchmark/`).
 """
 
 import argparse
@@ -37,7 +37,7 @@ from medllm.reporting.report import (
     load_stage_result,
     save_stage_result,
 )
-from medllm.tracking import configure_tracking
+from medllm.tracking import configure_tracking, metric_section_name
 from medllm.training.finetune import summarize_seeds
 
 METRIC_PREFIX = "benchmark"
@@ -134,7 +134,7 @@ def benchmark_model(model_path: str, config: MultitaskConfig) -> dict[str, float
 def benchmark_and_log(client: mlflow.MlflowClient, model_path: str, run_id: str, config: MultitaskConfig) -> dict[str, float]:
     """Benchmark one model and log its metrics to its MLflow run."""
     metrics: dict[str, float] = benchmark_model(model_path, config)
-    client.log_batch(run_id, metrics=[Metric(key, value, 0, 0) for key, value in metrics.items()])
+    client.log_batch(run_id, metrics=[Metric(metric_section_name(key), value, 0, 0) for key, value in metrics.items()])
     return metrics
 
 
@@ -183,7 +183,7 @@ def run_benchmarks(config: MultitaskConfig, runs: list[str], pretrained: bool = 
         summary: dict[str, dict[str, float]] = summarize_seeds([seed["metrics"] for seed in seeds])
         client.log_batch(
             finetune["parent_run_id"],
-            metrics=[Metric(f"{key}_mean", value["mean"], 0, 0) for key, value in summary.items()],
+            metrics=[Metric(metric_section_name(f"{key}_mean"), value["mean"], 0, 0) for key, value in summary.items()],
         )
         outcome["runs"][run] = {"seeds": seeds, "summary": summary}
     return outcome

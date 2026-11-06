@@ -46,7 +46,12 @@ from medllm.modeling import (
     resolve_model_source,
     weights_dtype,
 )
-from medllm.tracking import configure_tracking, start_stage_run
+from medllm.tracking import (
+    SectionedMLflowCallback,
+    configure_tracking,
+    metric_section_name,
+    start_stage_run,
+)
 from medllm.training.finetune import (
     VALIDATION_SETS,
     build_sft_config,
@@ -211,7 +216,7 @@ def sweep_objective(
             train_dataset=train_set.select_columns(SFT_COLUMNS),
             eval_dataset={name: splits[f"validation_{name}"].select_columns(SFT_COLUMNS) for name in VALIDATION_SETS},
             processing_class=AutoTokenizer.from_pretrained(model_source),
-            callbacks=[pruning_callback, StopAfterStepsCallback(budget_steps)],
+            callbacks=[SectionedMLflowCallback(), pruning_callback, StopAfterStepsCallback(budget_steps)],
             peft_config=build_peft_config(config),
         )
         try:
@@ -224,7 +229,7 @@ def sweep_objective(
         curve: list[float] = epoch_metrics(log_history, ["combined"])["combined"]
         trial.set_user_attr("validation_combined_curve", curve)
         mlflow.set_tag("status", "pruned" if pruned else "complete")
-        mlflow.log_metric("best_validation_combined_loss", min(curve))
+        mlflow.log_metric(metric_section_name("best_validation_combined_loss"), min(curve))
 
     del trainer
     free_gpu_memory()
@@ -274,7 +279,7 @@ def run_multitask_sweep(config: MultitaskConfig) -> tuple[dict[str, Any], list[d
             raise ValueError("No sweep trial completed")
         best: dict[str, Any] = min(completed, key=itemgetter("best_validation_combined_loss"))
         mlflow.log_params({f"best_{name}": value for name, value in study.best_trial.params.items()})
-        mlflow.log_metric("best_validation_combined_loss", best["best_validation_combined_loss"])
+        mlflow.log_metric(metric_section_name("best_validation_combined_loss"), best["best_validation_combined_loss"])
         mlflow.log_artifact(sweep.results_path)
 
     print("\nBest sweep trial:")

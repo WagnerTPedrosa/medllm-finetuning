@@ -46,8 +46,15 @@ from medllm.modeling import (
     set_end_of_turn,
     weights_dtype,
 )
+from medllm.reporting.plots import log_loss_curves
 from medllm.reporting.report import BASES, save_stage_result
-from medllm.tracking import configure_tracking, log_best_model, start_stage_run
+from medllm.tracking import (
+    SectionedMLflowCallback,
+    configure_tracking,
+    log_best_model,
+    sectioned_metrics,
+    start_stage_run,
+)
 
 VALIDATION_SETS = ("combined", "medtext", "pubmedqa", "medmcqa", "medqa")
 
@@ -147,7 +154,8 @@ def build_sft_config(
         # The non-reentrant variant also works when only LoRA adapters need gradients
         gradient_checkpointing_kwargs={"use_reentrant": False},
         seed=seed,
-        report_to="mlflow",
+        # SectionedMLflowCallback logs instead, with the metrics grouped by section
+        report_to="none",
     )
 
 
@@ -227,10 +235,11 @@ def train_multitask(
             train_dataset=train_set.select_columns(SFT_COLUMNS),
             eval_dataset={name: splits[f"validation_{name}"].select_columns(SFT_COLUMNS) for name in VALIDATION_SETS},
             processing_class=AutoTokenizer.from_pretrained(source),
-            callbacks=[EarlyStoppingCallback(config.training.early_stopping_patience)],
+            callbacks=[SectionedMLflowCallback(), EarlyStoppingCallback(config.training.early_stopping_patience)],
             peft_config=build_peft_config(config),
         )
         trainer.train()
+        log_loss_curves(trainer.state.log_history, "eval_combined_loss")
 
         curves: dict[str, list[float]] = epoch_metrics(trainer.state.log_history, list(VALIDATION_SETS))
         best_dir: Path = output_dir / "best"
@@ -244,7 +253,7 @@ def train_multitask(
             "mixture_epochs_trained": len(curves["combined"]),
             **evaluation.metrics,
         }
-        mlflow.log_metrics(summary)
+        mlflow.log_metrics(sectioned_metrics(summary))
 
     return {"run_id": run.info.run_id, "model_dir": str(best_dir), **summary, "correct": evaluation.correct}
 
@@ -283,8 +292,8 @@ def run_multitask_seeds(config: MultitaskConfig, base: str) -> dict[str, Any]:
         ]
         correct_by_seed: list[dict[str, list[int]]] = [result.pop("correct") for result in results]
         summary = summarize_seeds(results)
-        mlflow.log_metrics({f"{key}_mean": value["mean"] for key, value in summary.items()})
-        mlflow.log_metrics({f"{key}_std": value["std"] for key, value in summary.items()})
+        mlflow.log_metrics(sectioned_metrics({f"{key}_mean": value["mean"] for key, value in summary.items()}))
+        mlflow.log_metrics(sectioned_metrics({f"{key}_std": value["std"] for key, value in summary.items()}))
         mlflow.log_dict({"results": results, "summary": summary}, "seed_results.json")
 
         best = min(results, key=itemgetter("best_validation_combined_loss"))

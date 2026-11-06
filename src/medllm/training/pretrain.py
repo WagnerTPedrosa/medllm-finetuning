@@ -39,8 +39,16 @@ from transformers.trainer_utils import get_last_checkpoint
 from medllm.config import PretrainConfig, load_pretrain_config
 from medllm.data.corpus import load_pretrain_corpus
 from medllm.modeling import free_gpu_memory, load_causal_lm, resolve_model_source
+from medllm.reporting.plots import log_loss_curves
 from medllm.reporting.report import save_stage_result
-from medllm.tracking import configure_tracking, log_best_model, start_stage_run
+from medllm.tracking import (
+    SectionedMLflowCallback,
+    configure_tracking,
+    log_best_model,
+    metric_section_name,
+    sectioned_metrics,
+    start_stage_run,
+)
 
 RUN_ID_FILE = "mlflow_run_id.txt"
 
@@ -65,7 +73,7 @@ def collate_blocks(features: list[dict[str, list[int]]]) -> dict[str, torch.Tens
 
 
 class PerplexityCallback(TrainerCallback):
-    """Log `eval_perplexity` (exp of the evaluation loss) to the active MLflow run."""
+    """Log `eval/perplexity` (exp of the evaluation loss) to the active MLflow run."""
 
     def on_evaluate(
         self,
@@ -78,7 +86,7 @@ class PerplexityCallback(TrainerCallback):
         if metrics is None or "eval_loss" not in metrics or mlflow.active_run() is None:
             return
         mlflow.log_metric(
-            "eval_perplexity", math.exp(metrics["eval_loss"]), step=state.global_step
+            metric_section_name("eval_perplexity"), math.exp(metrics["eval_loss"]), step=state.global_step
         )
 
 
@@ -161,7 +169,8 @@ def build_training_arguments(
         optim=training.optim,
         dataloader_num_workers=training.dataloader_num_workers,
         seed=config.seed,
-        report_to="mlflow",
+        # SectionedMLflowCallback logs instead, with the metrics grouped by section
+        report_to="none",
     )
 
 
@@ -260,19 +269,22 @@ def run_pretraining(
             eval_dataset=validation_blocks,
             data_collator=collate_blocks,
             processing_class=tokenizer,
-            callbacks=[PerplexityCallback()],
+            callbacks=[SectionedMLflowCallback(), PerplexityCallback()],
         )
         trainer.train(resume_from_checkpoint=checkpoint)
+        log_loss_curves(trainer.state.log_history, "eval_loss")
 
         final_metrics: dict[str, float] = trainer.evaluate()
         final_loss: float = final_metrics["eval_loss"]
         final_dir: Path = output_dir / "final"
         trainer.save_model(str(final_dir))
         mlflow.log_metrics(
-            {
-                "final_eval_loss": final_loss,
-                "final_eval_perplexity": math.exp(final_loss),
-            }
+            sectioned_metrics(
+                {
+                    "final_eval_loss": final_loss,
+                    "final_eval_perplexity": math.exp(final_loss),
+                }
+            )
         )
 
     model_id: str | None = None
@@ -374,7 +386,7 @@ def sweep_learning_rates(config: PretrainConfig) -> list[dict[str, Any]]:
 
         best = min(results, key=itemgetter("eval_loss"))
         mlflow.log_params({"best_learning_rate": best["learning_rate"]})
-        mlflow.log_metrics({"best_eval_perplexity": best["eval_perplexity"]})
+        mlflow.log_metrics(sectioned_metrics({"best_eval_perplexity": best["eval_perplexity"]}))
         mlflow.log_dict({"results": results}, "lr_sweep_results.json")
 
     return results
