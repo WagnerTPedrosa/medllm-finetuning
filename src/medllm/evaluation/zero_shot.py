@@ -20,7 +20,12 @@ from medllm.config import MultitaskConfig, load_multitask_config
 from medllm.evaluation.tasks import TaskEvaluation, evaluate_model
 from medllm.modeling import model_label
 from medllm.reporting.report import BASES, save_stage_result
-from medllm.tracking import configure_tracking, sectioned_metrics, start_stage_run
+from medllm.tracking import (
+    configure_tracking,
+    run_variant,
+    sectioned_metrics,
+    start_stage_run,
+)
 from medllm.training.finetune import base_model_id
 
 
@@ -54,7 +59,13 @@ def run_baseline(config: MultitaskConfig, base: str = "original") -> dict[str, A
         "evaluate",
         f"zero-shot-{base}-{model_label(config.model.model_id)}",
         config,
-        {"task": "multitask", "evaluated_model": model_id, "finetune_base": base, "split": "test"},
+        {
+            "task": "multitask",
+            "evaluated_model": model_id,
+            "finetune_base": base,
+            "variant": run_variant(base, None),
+            "split": "test",
+        },
     ) as run:
         evaluation: TaskEvaluation = evaluate_model(model_id, config, "test")
         mlflow.log_metrics(sectioned_metrics(evaluation.metrics))

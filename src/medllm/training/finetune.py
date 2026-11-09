@@ -52,6 +52,7 @@ from medllm.tracking import (
     SectionedMLflowCallback,
     configure_tracking,
     log_best_model,
+    run_variant,
     sectioned_metrics,
     start_stage_run,
 )
@@ -200,13 +201,14 @@ def base_model_id(config: MultitaskConfig, base: str) -> str:
 
 
 def train_multitask(
-    config: MultitaskConfig, model_id: str, seed: int, splits: DatasetDict
+    config: MultitaskConfig, model_id: str, base: str, seed: int, splits: DatasetDict
 ) -> dict[str, Any]:
     """Fine-tune one seed as a nested run, then score the best epoch on the test sets.
 
     Args:
         config: Multitask configuration.
         model_id: Base model (Hub id, path or MLflow URI).
+        base: `original` or `dapt` (see `base_model_id`), for the run tags.
         seed: Random seed.
         splits: Splits written by `medllm.data.finetune_data filter_length`.
 
@@ -225,7 +227,14 @@ def train_multitask(
         "finetune",
         f"multitask-{method}-{model_label(model_id)}-seed{seed}",
         config,
-        {"task": "multitask", "finetune_seed": str(seed), "base_model": model_id, "finetune_method": method},
+        {
+            "task": "multitask",
+            "finetune_seed": str(seed),
+            "base_model": model_id,
+            "finetune_base": base,
+            "finetune_method": method,
+            "variant": run_variant(base, method),
+        },
         nested=mlflow.active_run() is not None,
     ) as run:
         mlflow.log_params({"examples_per_epoch": examples_per_epoch, "epoch_steps": epoch_steps})
@@ -283,12 +292,18 @@ def run_multitask_seeds(config: MultitaskConfig, base: str) -> dict[str, Any]:
         "finetune",
         f"multitask-{method}-{model_label(model_id)}",
         config,
-        {"task": "multitask", "base_model": model_id, "finetune_base": base, "finetune_method": method},
+        {
+            "task": "multitask",
+            "base_model": model_id,
+            "finetune_base": base,
+            "finetune_method": method,
+            "variant": run_variant(base, method),
+        },
     ) as parent:
         mlflow.log_dict(asdict(config), "config.json")
         mlflow.log_artifact(str(Path(config.finetune_data.processed_dir) / "stats.json"), "data")
         results: list[dict[str, Any]] = [
-            train_multitask(config, model_id, seed, splits) for seed in config.finetune.seeds
+            train_multitask(config, model_id, base, seed, splits) for seed in config.finetune.seeds
         ]
         correct_by_seed: list[dict[str, list[int]]] = [result.pop("correct") for result in results]
         summary = summarize_seeds(results)

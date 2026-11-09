@@ -21,6 +21,7 @@ from transformers import TrainerControl, TrainerState, TrainingArguments
 from transformers.integrations import MLflowCallback
 
 from medllm.config import MultitaskConfig, PretrainConfig
+from medllm.reporting.report import BASES
 
 
 def configure_tracking(config: MultitaskConfig | PretrainConfig) -> None:
@@ -132,6 +133,27 @@ class SectionedMLflowCallback(MLflowCallback):
         super().on_log(args, state, control, sectioned_metrics(logs), model=model, **kwargs)
 
 
+def run_variant(base: str, method: str | None) -> str:
+    """Training recipe of a model, for the `variant` tag of its runs.
+
+    Args:
+        base: `original` (the Hub model) or `dapt` (after PubMed pretraining).
+        method: Fine-tuning method (`lora`, `full`), or None for a model
+            that is not fine-tuned.
+
+    Returns:
+        `base`, `dapt`, `lora`, `dapt-lora`, `full` or `dapt-full`.
+
+    Raises:
+        ValueError: If `base` is not one of `BASES`.
+    """
+    if base not in BASES:
+        raise ValueError(f"base must be one of {BASES}, got {base!r}")
+    if method is None:
+        return "base" if base == "original" else "dapt"
+    return method if base == "original" else f"dapt-{method}"
+
+
 # MLflow reserves these alias names (case insensitive)
 RESERVED_ALIASES = {"latest"}
 
@@ -174,7 +196,7 @@ def start_stage_run(
     extra_tags: dict[str, str] | None = None,
     nested: bool = False,
 ) -> mlflow.ActiveRun:
-    """Start a run tagged with its pipeline stage, base model and git commit.
+    """Start a run tagged with its pipeline stage, model, base model and git commit.
 
     Args:
         stage: Pipeline stage (`pretrain`, `finetune` or `evaluate`).
@@ -188,6 +210,8 @@ def start_stage_run(
     """
     tags: dict[str, str] = {
         "stage": stage,
+        # Experiments are shared by every model: this tag tells their runs apart
+        "model": config.model.name,
         "base_model": config.model.model_id,
         **git_tags(),
         **(extra_tags or {}),

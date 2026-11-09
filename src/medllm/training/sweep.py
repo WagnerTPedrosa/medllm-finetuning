@@ -50,6 +50,7 @@ from medllm.tracking import (
     SectionedMLflowCallback,
     configure_tracking,
     metric_section_name,
+    run_variant,
     start_stage_run,
 )
 from medllm.training.finetune import (
@@ -203,7 +204,12 @@ def sweep_objective(
         "finetune",
         f"multitask-sweep-trial-{trial.number + 1}",
         config,
-        {"task": "multitask_sweep", "trial_number": str(trial.number + 1)},
+        # The sweep fine-tunes the Hub model
+        {
+            "task": "multitask_sweep",
+            "trial_number": str(trial.number + 1),
+            "variant": run_variant("original", config.finetune.method),
+        },
         nested=True,
     ) as run:
         trial.set_user_attr("mlflow_run_id", run.info.run_id)

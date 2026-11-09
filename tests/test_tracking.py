@@ -13,6 +13,7 @@ from medllm.tracking import (
     log_best_model,
     log_evaluation,
     metric_section_name,
+    run_variant,
     sectioned_metrics,
     start_stage_run,
 )
@@ -46,6 +47,7 @@ def test_trial_runs_are_nested_under_the_search_run(
     assert parent_tags["stage"] == "finetune"
     assert parent_tags["search_kind"] == "grid"
     assert parent_tags["base_model"] == config.model.model_id
+    assert parent_tags["model"] == config.model.name
     assert "git_commit" in parent_tags
 
 
@@ -203,3 +205,22 @@ def test_sectioned_mlflow_callback_logs_trainer_metrics_by_section() -> None:
     callback.on_log(None, state, None, logs={"loss": 1.9, "eval_combined_loss": 1.5})
 
     assert recorder.logged == [({"train/loss": 1.9, "eval/combined_loss": 1.5}, 500)]
+
+
+@pytest.mark.parametrize(
+    ("base", "method", "expected"),
+    [
+        ("original", None, "base"),
+        ("dapt", None, "dapt"),
+        ("original", "lora", "lora"),
+        ("dapt", "lora", "dapt-lora"),
+        ("dapt", "full", "dapt-full"),
+    ],
+)
+def test_run_variant_names_the_training_recipe(base: str, method: str | None, expected: str) -> None:
+    assert run_variant(base, method) == expected
+
+
+def test_run_variant_rejects_an_unknown_base() -> None:
+    with pytest.raises(ValueError, match="base"):
+        run_variant("instruct", "lora")
