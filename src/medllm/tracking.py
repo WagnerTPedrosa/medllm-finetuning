@@ -11,12 +11,14 @@ prefix before the slash (`metric_section_name`).
 
 import os
 import subprocess
+import time
 import warnings
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 import mlflow
+from mlflow.entities import Metric
 from transformers import TrainerControl, TrainerState, TrainingArguments
 from transformers.integrations import MLflowCallback
 
@@ -112,6 +114,22 @@ def metric_section_name(key: str) -> str:
 def sectioned_metrics(metrics: dict[str, float]) -> dict[str, float]:
     """The same metrics, named with their section (see `metric_section_name`)."""
     return {metric_section_name(key): value for key, value in metrics.items()}
+
+
+def sectioned_metric_entries(metrics: dict[str, float]) -> list[Metric]:
+    """Metrics for `MlflowClient.log_batch`, named with their section, at step 0 and the current time.
+
+    The current time matters when a stage is run again: with a fixed
+    timestamp the two values tie, and MLflow shows the larger as the latest.
+
+    Args:
+        metrics: Metric name -> value.
+
+    Returns:
+        One MLflow metric per entry, in the same order.
+    """
+    timestamp_ms: int = int(time.time() * 1000)
+    return [Metric(metric_section_name(key), value, timestamp_ms, 0) for key, value in metrics.items()]
 
 
 class SectionedMLflowCallback(MLflowCallback):

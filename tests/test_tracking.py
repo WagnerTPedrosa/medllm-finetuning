@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from medllm.tracking import (
     log_evaluation,
     metric_section_name,
     run_variant,
+    sectioned_metric_entries,
     sectioned_metrics,
     start_stage_run,
 )
@@ -224,3 +226,17 @@ def test_run_variant_names_the_training_recipe(base: str, method: str | None, ex
 def test_run_variant_rejects_an_unknown_base() -> None:
     with pytest.raises(ValueError, match="base"):
         run_variant("instruct", "lora")
+
+
+def test_sectioned_metric_entries_name_by_section_and_stamp_the_current_time() -> None:
+    # A timestamp of 0 would tie with an earlier logging of the same metric,
+    # and MLflow would then show the larger value as the latest one
+    before_ms = int(time.time() * 1000)
+
+    entries = sectioned_metric_entries({"test_medqa_accuracy": 0.41, "benchmark_mmlu_acc": 0.5})
+
+    assert [(entry.key, entry.value, entry.step) for entry in entries] == [
+        ("test/medqa_accuracy", 0.41, 0),
+        ("benchmark/mmlu_acc", 0.5, 0),
+    ]
+    assert all(entry.timestamp >= before_ms for entry in entries)
