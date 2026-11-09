@@ -7,10 +7,14 @@ import pytest
 
 from medllm.config import MultitaskConfig
 from medllm.tracking import (
+    SectionedMLflowCallback,
     configure_tracking,
     git_tags,
     log_best_model,
     log_evaluation,
+    metric_section_name,
+    run_variant,
+    sectioned_metrics,
     start_stage_run,
 )
 
@@ -43,6 +47,7 @@ def test_trial_runs_are_nested_under_the_search_run(
     assert parent_tags["stage"] == "finetune"
     assert parent_tags["search_kind"] == "grid"
     assert parent_tags["base_model"] == config.model.model_id
+    assert parent_tags["model"] == config.model.name
     assert "git_commit" in parent_tags
 
 
@@ -87,7 +92,7 @@ def test_log_evaluation_records_prefixed_metrics(config: MultitaskConfig, tracki
     )
 
     saved = mlflow.get_run(run_id)
-    assert saved.data.metrics == {"test_loss": 2.0, "test_perplexity": 7.39}
+    assert saved.data.metrics == {"test/loss": 2.0, "test/perplexity": 7.39}
     assert saved.data.tags["stage"] == "evaluate"
     assert saved.data.tags["evaluated_model"] == "checkpoints/gpt2-medtext-best"
 
@@ -129,3 +134,93 @@ def test_configure_tracking_uses_new_name_after_experiment_deleted(
         assert mlflow.get_experiment(old_experiment.experiment_id).lifecycle_stage == "deleted"
     finally:
         mlflow.set_tracking_uri(old_uri)
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        # Training logs of the Trainer
+        ("loss", "train/loss"),
+        ("grad_norm", "train/grad_norm"),
+        ("learning_rate", "train/learning_rate"),
+        ("mean_token_accuracy", "train/mean_token_accuracy"),
+        ("epoch", "train/epoch"),
+        # Validation during training
+        ("eval_loss", "eval/loss"),
+        ("eval_combined_loss", "eval/combined_loss"),
+        ("eval_perplexity", "eval/perplexity"),
+        ("final_eval_loss", "eval/final_loss"),
+        # Speed, not quality
+        ("eval_combined_runtime", "perf/eval_combined_runtime"),
+        ("eval_medqa_samples_per_second", "perf/eval_medqa_samples_per_second"),
+        ("train_steps_per_second", "perf/train_steps_per_second"),
+        ("total_flos", "perf/total_flos"),
+        # Final scores
+        ("test_medqa_accuracy", "test/medqa_accuracy"),
+        ("test_medqa_accuracy_mean", "test/medqa_accuracy_mean"),
+        ("validation_combined_loss", "validation/combined_loss"),
+        ("benchmark_medqa_4options_acc", "benchmark/medqa_4options_acc"),
+        ("test_medtext_geval_correctness", "geval/medtext_correctness"),
+        ("test_medtext_geval_correctness_mean", "geval/medtext_correctness_mean"),
+        # One value per run
+        ("train_loss", "summary/train_loss"),
+        ("best_validation_combined_loss", "summary/best_validation_combined_loss"),
+        ("mixture_epochs_trained", "summary/mixture_epochs_trained"),
+        ("mixture_epochs_trained_mean", "summary/mixture_epochs_trained_mean"),
+        # Already in a section, or unknown
+        ("system/gpu_0_utilization_percentage", "system/gpu_0_utilization_percentage"),
+        ("custom_metric", "custom_metric"),
+    ],
+)
+def test_metric_section_name_groups_metrics_by_prefix(key: str, expected: str) -> None:
+    assert metric_section_name(key) == expected
+
+
+def test_sectioned_metrics_renames_every_key_and_keeps_values() -> None:
+    assert sectioned_metrics({"loss": 1.5, "test_medqa_accuracy": 0.4}) == {
+        "train/loss": 1.5,
+        "test/medqa_accuracy": 0.4,
+    }
+
+
+class RecordingMlflow:
+    """Stands in for the `mlflow` module inside the Trainer callback."""
+
+    def __init__(self) -> None:
+        self.logged: list[tuple[dict[str, float], int]] = []
+
+    def log_metrics(self, metrics: dict[str, float], step: int) -> None:
+        self.logged.append((metrics, step))
+
+
+def test_sectioned_mlflow_callback_logs_trainer_metrics_by_section() -> None:
+    recorder = RecordingMlflow()
+    callback = SectionedMLflowCallback()
+    # Skip the callback's setup, which reads the TrainingArguments and the model
+    callback._initialized = True
+    callback._async_log = False
+    callback._ml_flow = recorder
+    state = SimpleNamespace(is_world_process_zero=True, global_step=500)
+
+    callback.on_log(None, state, None, logs={"loss": 1.9, "eval_combined_loss": 1.5})
+
+    assert recorder.logged == [({"train/loss": 1.9, "eval/combined_loss": 1.5}, 500)]
+
+
+@pytest.mark.parametrize(
+    ("base", "method", "expected"),
+    [
+        ("original", None, "base"),
+        ("dapt", None, "dapt"),
+        ("original", "lora", "lora"),
+        ("dapt", "lora", "dapt-lora"),
+        ("dapt", "full", "dapt-full"),
+    ],
+)
+def test_run_variant_names_the_training_recipe(base: str, method: str | None, expected: str) -> None:
+    assert run_variant(base, method) == expected
+
+
+def test_run_variant_rejects_an_unknown_base() -> None:
+    with pytest.raises(ValueError, match="base"):
+        run_variant("instruct", "lora")

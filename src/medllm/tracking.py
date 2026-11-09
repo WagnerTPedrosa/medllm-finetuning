@@ -3,6 +3,10 @@
 Every pipeline stage opens a run with `start_stage_run`; the best model of a
 stage is logged and registered under `config.mlflow.registered_model_name`
 with an alias (`log_best_model`).
+
+Metrics are logged under sections (`train/loss`, `eval/combined_loss`,
+`test/medqa_accuracy`, ...): the MLflow UI groups the charts of a run by the
+prefix before the slash (`metric_section_name`).
 """
 
 import os
@@ -10,10 +14,14 @@ import subprocess
 import warnings
 from importlib.metadata import version
 from pathlib import Path
+from typing import Any
 
 import mlflow
+from transformers import TrainerControl, TrainerState, TrainingArguments
+from transformers.integrations import MLflowCallback
 
 from medllm.config import MultitaskConfig, PretrainConfig
+from medllm.reporting.report import BASES
 
 
 def configure_tracking(config: MultitaskConfig | PretrainConfig) -> None:
@@ -44,6 +52,106 @@ def configure_tracking(config: MultitaskConfig | PretrainConfig) -> None:
     else:
         experiment_name = requested_name
     mlflow.set_experiment(experiment_name)
+
+
+# Logs of the Trainer while it trains (the rest of its keys say which split they belong to)
+TRAIN_KEYS = {"loss", "grad_norm", "learning_rate", "entropy", "mean_token_accuracy", "num_tokens", "epoch"}
+# One value per run, logged at the end of training
+SUMMARY_KEYS = {"train_loss", "mixture_epochs_trained"}
+# Speed, not model quality
+PERF_SUFFIXES = ("_runtime", "_samples_per_second", "_steps_per_second")
+# Metric prefix -> MLflow section, checked in order
+SECTION_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("final_eval_", "eval/final_"),
+    ("eval_", "eval/"),
+    ("test_", "test/"),
+    ("validation_", "validation/"),
+    ("benchmark_", "benchmark/"),
+    ("best_", "summary/best_"),
+)
+GEVAL_MARKER = "_geval_"
+# Mean and standard deviation over seeds, logged to the parent run
+SEED_SUMMARY_SUFFIXES = ("_mean", "_std")
+
+
+def metric_section_name(key: str) -> str:
+    """MLflow name of a metric, with its section as prefix (`eval_combined_loss` -> `eval/combined_loss`).
+
+    Sections: `train` (training logs), `eval` (validation during training),
+    `test`, `validation`, `benchmark`, `geval` (scores of the judge model),
+    `perf` (runtime and throughput) and `summary` (one value per run).
+
+    Args:
+        key: Metric name without a section, as the code computes it.
+
+    Returns:
+        The name with its section; names that already have one, or match no
+        section, are returned unchanged.
+    """
+    if "/" in key:
+        return key
+    if key in TRAIN_KEYS:
+        return f"train/{key}"
+    # mixture_epochs_trained_mean is a summary like mixture_epochs_trained
+    base_key: str = key
+    for suffix in SEED_SUMMARY_SUFFIXES:
+        base_key = base_key.removesuffix(suffix)
+    if base_key in SUMMARY_KEYS:
+        return f"summary/{key}"
+    if key == "total_flos" or key.endswith(PERF_SUFFIXES):
+        return f"perf/{key}"
+    if GEVAL_MARKER in key:
+        # test_medtext_geval_correctness -> geval/medtext_correctness
+        return "geval/" + key.removeprefix("test_").replace(GEVAL_MARKER, "_")
+    for prefix, section in SECTION_PREFIXES:
+        if key.startswith(prefix):
+            return section + key.removeprefix(prefix)
+    return key
+
+
+def sectioned_metrics(metrics: dict[str, float]) -> dict[str, float]:
+    """The same metrics, named with their section (see `metric_section_name`)."""
+    return {metric_section_name(key): value for key, value in metrics.items()}
+
+
+class SectionedMLflowCallback(MLflowCallback):
+    """The Trainer's MLflow logging, with every metric named by its section.
+
+    Use it with `report_to="none"`, so the default callback does not log the
+    same metrics again under their plain names.
+    """
+
+    def on_log(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        logs: dict[str, float],
+        model: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        super().on_log(args, state, control, sectioned_metrics(logs), model=model, **kwargs)
+
+
+def run_variant(base: str, method: str | None) -> str:
+    """Training recipe of a model, for the `variant` tag of its runs.
+
+    Args:
+        base: `original` (the Hub model) or `dapt` (after PubMed pretraining).
+        method: Fine-tuning method (`lora`, `full`), or None for a model
+            that is not fine-tuned.
+
+    Returns:
+        `base`, `dapt`, `lora`, `dapt-lora`, `full` or `dapt-full`.
+
+    Raises:
+        ValueError: If `base` is not one of `BASES`.
+    """
+    if base not in BASES:
+        raise ValueError(f"base must be one of {BASES}, got {base!r}")
+    if method is None:
+        return "base" if base == "original" else "dapt"
+    return method if base == "original" else f"dapt-{method}"
 
 
 # MLflow reserves these alias names (case insensitive)
@@ -88,7 +196,7 @@ def start_stage_run(
     extra_tags: dict[str, str] | None = None,
     nested: bool = False,
 ) -> mlflow.ActiveRun:
-    """Start a run tagged with its pipeline stage, base model and git commit.
+    """Start a run tagged with its pipeline stage, model, base model and git commit.
 
     Args:
         stage: Pipeline stage (`pretrain`, `finetune` or `evaluate`).
@@ -102,6 +210,8 @@ def start_stage_run(
     """
     tags: dict[str, str] = {
         "stage": stage,
+        # Experiments are shared by every model: this tag tells their runs apart
+        "model": config.model.name,
         "base_model": config.model.model_id,
         **git_tags(),
         **(extra_tags or {}),
@@ -183,7 +293,7 @@ def log_evaluation(
 
     Args:
         model_source: Evaluated model (Hub id, local path or `models:/` URI).
-        split: Evaluated split, used as metric prefix (`test_loss`, ...).
+        split: Evaluated split, used as metric section (`test/loss`, ...).
         metrics: Metric values without prefix, e.g. `{"loss": 2.07}`.
         config: Experiment configuration.
 
@@ -195,5 +305,5 @@ def log_evaluation(
     with start_stage_run(
         "evaluate", run_name, config, tags, nested=mlflow.active_run() is not None
     ) as run:
-        mlflow.log_metrics({f"{split}_{name}": value for name, value in metrics.items()})
+        mlflow.log_metrics(sectioned_metrics({f"{split}_{name}": value for name, value in metrics.items()}))
     return run.info.run_id
