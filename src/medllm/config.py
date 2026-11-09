@@ -43,6 +43,8 @@ DEFAULT_EVAL_DTYPE = "float32"
 
 @dataclass(frozen=True)
 class ModelConfig:
+    # Short name used in paths and MLflow tags (qwen3-1.7b)
+    name: str
     model_id: str
     max_seq_len: int
     # Dtype of the weights when the model is evaluated: float32, or bfloat16
@@ -200,7 +202,9 @@ def load_pretrain_config(overrides: list[str] | None = None) -> PretrainConfig:
             registered_model_name=raw["mlflow"]["pretrain_registered_model"],
             log_system_metrics=raw["mlflow"]["log_system_metrics"],
         ),
-        model=ModelConfig(model_id=raw["model"]["model_id"], max_seq_len=raw["model"]["max_seq_len"]),
+        model=ModelConfig(
+            name=raw["model"]["name"], model_id=raw["model"]["model_id"], max_seq_len=raw["model"]["max_seq_len"]
+        ),
         corpus=CorpusConfig(**corpus_section),
         pretraining=PretrainingConfig(**raw["pretraining"]),
         lr_sweep=LRSweepConfig(**raw["lr_sweep"]),
@@ -363,11 +367,12 @@ def load_multitask_config(overrides: list[str] | None = None) -> MultitaskConfig
         seed=raw["seed"],
         mlflow=MLflowConfig(
             tracking_uri=raw["mlflow"]["tracking_uri"],
-            experiment_name=raw["mlflow"]["multitask_experiment"],
-            registered_model_name=raw["mlflow"]["multitask_registered_model"],
+            experiment_name=raw["mlflow"]["selection_experiment"],
+            registered_model_name=raw["mlflow"]["selection_registered_model"],
             log_system_metrics=raw["mlflow"]["log_system_metrics"],
         ),
         model=ModelConfig(
+            name=raw["model"]["name"],
             model_id=raw["model"]["model_id"],
             max_seq_len=raw["model"]["max_seq_len"],
             eval_dtype=raw["model"].get("eval_dtype", DEFAULT_EVAL_DTYPE),

@@ -129,13 +129,17 @@ stages:
       size: 65885
   judge_geval@qwen3-1.7b:
     cmd: uv run python -m medllm.evaluation.geval model=qwen3-1.7b --runs 
-      lora_original
+      lora_original lora_dapt
     deps:
     - path: data/processed/finetune_qwen3-1.7b
       hash: md5
       md5: c125756b0e859b981827356775578dc4.dir
       size: 568233509
       nfiles: 15
+    - path: results/qwen3-1.7b/finetune_lora_dapt.json
+      hash: md5
+      md5: 974cb064efe8cd4941a946f88d745721
+      size: 65933
     - path: results/qwen3-1.7b/finetune_lora_original.json
       hash: md5
       md5: f4ecfc4f1c257d0f15b388c27797e86e
@@ -146,8 +150,8 @@ stages:
       size: 2642
     - path: src/medllm/evaluation/geval.py
       hash: md5
-      md5: f42f190e57fe8ecb172843778f5dc1a9
-      size: 16886
+      md5: 00dd023c27b0901b4e1cc5b1b10ee3ae
+      size: 16890
     params:
       configs/config.yaml:
         geval.judge_model: Qwen/Qwen3.8-27B
@@ -156,24 +160,32 @@ stages:
     outs:
     - path: results/qwen3-1.7b/geval.json
       hash: md5
-      md5: da89cba14766c73e8d31712fc4d2ab77
-      size: 6080
+      md5: 54cfede4c2b4f9acc45b1311ca95e9c9
+      size: 12077
   evaluate_benchmarks@qwen3-1.7b:
     cmd: uv run python -m medllm.evaluation.benchmarks model=qwen3-1.7b --runs 
-      lora_original
+      lora_original lora_dapt --pretrained
     deps:
     - path: results/qwen3-1.7b/baseline.json
       hash: md5
       md5: 34bcc4899aaf5a721ca5823aa61d9021
       size: 64920
+    - path: results/qwen3-1.7b/finetune_lora_dapt.json
+      hash: md5
+      md5: 974cb064efe8cd4941a946f88d745721
+      size: 65933
     - path: results/qwen3-1.7b/finetune_lora_original.json
       hash: md5
       md5: f4ecfc4f1c257d0f15b388c27797e86e
       size: 65885
+    - path: results/qwen3-1.7b/pretrain.json
+      hash: md5
+      md5: a0824337a4a2f961c0f914f9f51ef186
+      size: 305
     - path: src/medllm/evaluation/benchmarks.py
       hash: md5
-      md5: caf0bbd40f51ff33bd63d60247d298c6
-      size: 6040
+      md5: e930ed43be9dd603312e3542eebeeb27
+      size: 9748
     - path: src/medllm/evaluation/lm_eval_tasks
       hash: md5
       md5: 2a172c0af5e8a534e90d05354075d9b9.dir
@@ -192,6 +204,12 @@ stages:
           - mmlu_college_medicine
           - mmlu_medical_genetics
           - mmlu_professional_medicine
+          general_tasks:
+          - mmlu
+          - arc_challenge
+          - hellaswag
+          perplexity_tasks:
+          - wikitext
           num_fewshot: 0
           batch_size: 16
         finetune_data.system_prompt: You are a medical assistant. Answer medical
@@ -199,8 +217,8 @@ stages:
     outs:
     - path: results/qwen3-1.7b/benchmarks.json
       hash: md5
-      md5: 8d3a2d8d17b1812e87b360e300cc8817
-      size: 7427
+      md5: b14f4d4796dd66f6ca07da1938fe8bfb
+      size: 19657
   report:
     cmd: uv run python -m medllm.reporting.report --models qwen3-1.7b 
       --data-stats data/processed/finetune_qwen3-1.7b/stats.json
@@ -213,24 +231,233 @@ stages:
       hash: md5
       md5: 34bcc4899aaf5a721ca5823aa61d9021
       size: 64920
+    - path: results/qwen3-1.7b/baseline_dapt.json
+      hash: md5
+      md5: b3253a4483eb094f1f7b323ef3702450
+      size: 64940
     - path: results/qwen3-1.7b/benchmarks.json
       hash: md5
-      md5: 8d3a2d8d17b1812e87b360e300cc8817
-      size: 7427
+      md5: b14f4d4796dd66f6ca07da1938fe8bfb
+      size: 19657
+    - path: results/qwen3-1.7b/finetune_lora_dapt.json
+      hash: md5
+      md5: 974cb064efe8cd4941a946f88d745721
+      size: 65933
     - path: results/qwen3-1.7b/finetune_lora_original.json
       hash: md5
       md5: f4ecfc4f1c257d0f15b388c27797e86e
       size: 65885
     - path: results/qwen3-1.7b/geval.json
       hash: md5
-      md5: da89cba14766c73e8d31712fc4d2ab77
-      size: 6080
+      md5: 54cfede4c2b4f9acc45b1311ca95e9c9
+      size: 12077
     - path: src/medllm/reporting/report.py
       hash: md5
-      md5: 493bc4e20e0b2b3ca38c871b75989308
-      size: 14239
+      md5: 9bf7e1689b939601c777ab4f324e76a1
+      size: 18325
     outs:
     - path: reports/comparison.md
       hash: md5
-      md5: 5272968d0dc7a7e91bc31828673aba1d
-      size: 2280
+      md5: 3547a19b2a6be0236b9a42056078aa8f
+      size: 5070
+  pretrain@qwen3-1.7b:
+    cmd: uv run python -m medllm.training.pretrain model=qwen3-1.7b
+    deps:
+    - path: data/processed/pubmed_qwen3-1.7b
+      hash: md5
+      md5: 900dae823333742d86b3c3368dca0574.dir
+      size: 24595461350
+      nfiles: 57
+    - path: src/medllm/modeling.py
+      hash: md5
+      md5: 16c52377f0ee43ad197222776aea641f
+      size: 5828
+    - path: src/medllm/tracking.py
+      hash: md5
+      md5: a74d02c09446b76445bce77af83ab770
+      size: 7182
+    - path: src/medllm/training/pretrain.py
+      hash: md5
+      md5: 01c572caec5e0ec1d1157b9f6f0f4c84
+      size: 15810
+    params:
+      configs/config.yaml:
+        pretraining:
+          output_dir: checkpoints/pretrain/${model.name}-pubmed-dapt
+          learning_rate: ???
+          lr_scheduler_type: cosine
+          warmup_ratio: 0.05
+          weight_decay: 0.1
+          max_grad_norm: 1.0
+          num_train_epochs: 1.0
+          max_tokens:
+          per_device_batch_size: ???
+          gradient_accumulation_steps: ???
+          eval_batch_size: ???
+          gradient_checkpointing: ???
+          eval_steps: 250
+          save_steps: 500
+          save_total_limit: 2
+          logging_steps: 10
+          bf16: true
+          torch_compile: true
+          optim: adamw_torch_fused
+          dataloader_num_workers: 4
+          registry_alias: candidate
+        seed: 42
+      configs/model/qwen3-1.7b.yaml:
+        model:
+          name: qwen3-1.7b
+          model_id: Qwen/Qwen3-1.7B-Base
+          max_seq_len: 2048
+        pretraining:
+          learning_rate: 3e-05
+          per_device_batch_size: 4
+          gradient_accumulation_steps: 64
+          eval_batch_size: 8
+          gradient_checkpointing: false
+    outs:
+    - path: results/qwen3-1.7b/pretrain.json
+      hash: md5
+      md5: a0824337a4a2f961c0f914f9f51ef186
+      size: 305
+  evaluate_zero_shot_dapt@qwen3-1.7b:
+    cmd: uv run python -m medllm.evaluation.zero_shot model=qwen3-1.7b --base 
+      dapt
+    deps:
+    - path: data/processed/finetune_qwen3-1.7b
+      hash: md5
+      md5: c125756b0e859b981827356775578dc4.dir
+      size: 568233509
+      nfiles: 15
+    - path: results/qwen3-1.7b/pretrain.json
+      hash: md5
+      md5: a0824337a4a2f961c0f914f9f51ef186
+      size: 305
+    - path: src/medllm/evaluation/choices.py
+      hash: md5
+      md5: 1f2552db5fcc32e63303d58289fde2d5
+      size: 8084
+    - path: src/medllm/evaluation/loss.py
+      hash: md5
+      md5: 3bf7d64b5d5573b455c613c574bc8d42
+      size: 1601
+    - path: src/medllm/evaluation/tasks.py
+      hash: md5
+      md5: d7f9b70c840556492dc4c1651beafd44
+      size: 4489
+    - path: src/medllm/evaluation/zero_shot.py
+      hash: md5
+      md5: 8a76c3dcf708fde0837c9c3b44baa12c
+      size: 3239
+    - path: src/medllm/modeling.py
+      hash: md5
+      md5: 16c52377f0ee43ad197222776aea641f
+      size: 5828
+    params:
+      configs/config.yaml:
+        finetune.dapt_model_id: 
+          models:/${mlflow.pretrain_registered_model}@${pretraining.registry_alias}
+        training.eval_batch_size: 8
+      configs/model/qwen3-1.7b.yaml:
+        model:
+          name: qwen3-1.7b
+          model_id: Qwen/Qwen3-1.7B-Base
+          max_seq_len: 2048
+    outs:
+    - path: results/qwen3-1.7b/baseline_dapt.json
+      hash: md5
+      md5: b3253a4483eb094f1f7b323ef3702450
+      size: 64940
+  finetune_lora_dapt@qwen3-1.7b:
+    cmd: uv run python -m medllm.training.finetune --base dapt model=qwen3-1.7b 
+      finetune.method=lora
+    deps:
+    - path: data/processed/finetune_qwen3-1.7b
+      hash: md5
+      md5: c125756b0e859b981827356775578dc4.dir
+      size: 568233509
+      nfiles: 15
+    - path: results/qwen3-1.7b/pretrain.json
+      hash: md5
+      md5: a0824337a4a2f961c0f914f9f51ef186
+      size: 305
+    - path: src/medllm/data/mixture.py
+      hash: md5
+      md5: 829d0c9e11172c13298eadf1c8ffa935
+      size: 3591
+    - path: src/medllm/evaluation/choices.py
+      hash: md5
+      md5: 1f2552db5fcc32e63303d58289fde2d5
+      size: 8084
+    - path: src/medllm/evaluation/loss.py
+      hash: md5
+      md5: 3bf7d64b5d5573b455c613c574bc8d42
+      size: 1601
+    - path: src/medllm/evaluation/tasks.py
+      hash: md5
+      md5: d7f9b70c840556492dc4c1651beafd44
+      size: 4489
+    - path: src/medllm/modeling.py
+      hash: md5
+      md5: 16c52377f0ee43ad197222776aea641f
+      size: 5828
+    - path: src/medllm/tracking.py
+      hash: md5
+      md5: a74d02c09446b76445bce77af83ab770
+      size: 7182
+    - path: src/medllm/training/finetune.py
+      hash: md5
+      md5: 8e5f856112f9bf514ff011d8c7db335d
+      size: 13670
+    params:
+      configs/config.yaml:
+        finetune.dapt_model_id: 
+          models:/${mlflow.pretrain_registered_model}@${pretraining.registry_alias}
+        finetune.lora:
+          r: 16
+          alpha: 32
+          dropout: 0.05
+          target_modules:
+          - q_proj
+          - k_proj
+          - v_proj
+          - o_proj
+          - gate_proj
+          - up_proj
+          - down_proj
+          modules_to_save:
+          - embed_tokens
+        mixture:
+          epochs: 5
+          medtext_repeats: 5
+          pubmedqa_labeled_repeats: 5
+          pubmedqa_artificial_per_class: 15000
+          medmcqa_per_epoch: 60000
+          medqa_repeats: 2
+        seed: 42
+        training:
+          max_epochs: ${mixture.epochs}
+          early_stopping_patience: 2
+          eval_batch_size: 8
+          max_grad_norm: 1.0
+          weight_decay: 0.01
+          lr_scheduler_type: constant
+          warmup_ratio: 0.05
+      configs/model/qwen3-1.7b.yaml:
+        finetune:
+          method: lora
+          learning_rate: 0.0002
+          batch_size: 16
+          gradient_checkpointing: true
+          seeds:
+          - 42
+        model:
+          name: qwen3-1.7b
+          model_id: Qwen/Qwen3-1.7B-Base
+          max_seq_len: 2048
+    outs:
+    - path: results/qwen3-1.7b/finetune_lora_dapt.json
+      hash: md5
+      md5: 974cb064efe8cd4941a946f88d745721
+      size: 65933

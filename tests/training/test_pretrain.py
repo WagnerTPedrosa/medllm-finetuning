@@ -55,7 +55,7 @@ def test_build_training_arguments_follows_config(tmp_path: Path) -> None:
     assert args.gradient_accumulation_steps == training.gradient_accumulation_steps
     assert args.eval_steps == training.eval_steps
     assert args.max_steps == -1
-    assert args.report_to == ["mlflow"]
+    assert args.report_to in ([], ["none"])
     assert args.save_total_limit == training.save_total_limit
     assert args.torch_compile == training.torch_compile
     assert args.optim == training.optim
@@ -129,7 +129,7 @@ def test_perplexity_callback_logs_exp_of_eval_loss(tracking_store: Path) -> None
             metrics={"eval_loss": 2.0},
         )
 
-    history = mlflow.MlflowClient().get_metric_history(run.info.run_id, "eval_perplexity")
+    history = mlflow.MlflowClient().get_metric_history(run.info.run_id, "eval/perplexity")
     assert [(point.step, round(point.value, 4)) for point in history] == [
         (40, round(math.exp(2.0), 4))
     ]

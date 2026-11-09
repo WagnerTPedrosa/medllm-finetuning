@@ -41,7 +41,6 @@ from datasets import Dataset
 from deepeval.metrics import GEval
 from deepeval.models import DeepEvalBaseLLM, LocalModel
 from deepeval.test_case import LLMTestCase, SingleTurnParams
-from mlflow.entities import Metric
 from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from medllm.chat import Message, message_text, prompt_text
@@ -50,7 +49,7 @@ from medllm.data.finetune_data import load_finetune_data
 from medllm.evaluation.generation import generate_completion
 from medllm.modeling import load_model
 from medllm.reporting.report import load_stage_result, save_stage_result
-from medllm.tracking import configure_tracking
+from medllm.tracking import configure_tracking, sectioned_metric_entries
 from medllm.training.finetune import summarize_seeds
 
 METRIC_PREFIX = "test_medtext_geval"
@@ -325,7 +324,7 @@ def log_seed_scores(
     """
     summary: dict[str, float] = summarize_geval(rows, list(GEVAL_METRICS), METRIC_PREFIX)
     client = mlflow.MlflowClient()
-    client.log_batch(run_id, metrics=[Metric(key, value, 0, 0) for key, value in summary.items()])
+    client.log_batch(run_id, metrics=sectioned_metric_entries(summary))
     client.set_tag(run_id, "geval_judge", judge_model)
     table = pd.DataFrame(
         {"question": questions, "reference": references, "answer": answers}
@@ -392,11 +391,11 @@ def run_geval(config: MultitaskConfig, runs: list[str]) -> dict[str, Any]:
                 )
 
             summary = summarize_seeds(seed_summaries)
-            metrics: list[Metric] = []
+            parent_metrics: dict[str, float] = {}
             for key, value in summary.items():
-                metrics.append(Metric(f"{key}_mean", value["mean"], 0, 0))
-                metrics.append(Metric(f"{key}_std", value["std"], 0, 0))
-            client.log_batch(finetune["parent_run_id"], metrics=metrics)
+                parent_metrics[f"{key}_mean"] = value["mean"]
+                parent_metrics[f"{key}_std"] = value["std"]
+            client.log_batch(finetune["parent_run_id"], metrics=sectioned_metric_entries(parent_metrics))
             client.set_tag(finetune["parent_run_id"], "geval_judge", config.geval.judge_model)
             summaries[run] = summary
             scores[run] = mean_scores_per_example(seed_rows, list(GEVAL_METRICS))

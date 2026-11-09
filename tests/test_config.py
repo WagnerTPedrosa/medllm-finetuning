@@ -57,7 +57,9 @@ def test_load_pretrain_config_names_mlflow_and_paths_after_the_model() -> None:
     config: PretrainConfig = load_pretrain_config(["model=qwen3-1.7b"])
 
     assert config.model.model_id == "Qwen/Qwen3-1.7B-Base"
-    assert config.mlflow.experiment_name == "qwen3-1.7b-pubmed-pretrain"
+    assert config.model.name == "qwen3-1.7b"
+    # One experiment for the pretraining of every model, told apart by the `model` tag
+    assert config.mlflow.experiment_name == "pubmed-dapt"
     assert config.mlflow.registered_model_name == "qwen3-1.7b-pubmed-dapt"
     assert config.corpus.processed_dir == "data/processed/pubmed_qwen3-1.7b"
     assert config.pretraining.output_dir == "checkpoints/pretrain/qwen3-1.7b-pubmed-dapt"
@@ -87,8 +89,10 @@ def test_load_pretrain_config_expands_the_corpus_directory() -> None:
 def test_load_multitask_config_points_dapt_at_the_pretrained_model() -> None:
     config: MultitaskConfig = load_multitask_config(["model=qwen3-1.7b"])
 
-    assert config.mlflow.experiment_name == "qwen3-1.7b-med-multitask"
-    assert config.mlflow.registered_model_name == "qwen3-1.7b-med-multitask"
+    # One experiment to compare every model and variant on medical Q&A
+    assert config.mlflow.experiment_name == "med-qa-selection"
+    assert config.mlflow.registered_model_name == "qwen3-1.7b-med-qa"
+    assert config.model.name == "qwen3-1.7b"
     assert config.finetune.dapt_model_id == "models:/qwen3-1.7b-pubmed-dapt@candidate"
 
 

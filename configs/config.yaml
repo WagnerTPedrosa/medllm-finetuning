@@ -19,10 +19,14 @@ mlflow:
   tracking_uri: sqlite:///mlflow.db
   # CPU, RAM and GPU usage per run (needs nvidia-ml-py for the GPU)
   log_system_metrics: true
-  pretrain_experiment: ${model.name}-pubmed-pretrain
+  # Experiments are shared by every model, so their runs can be compared in one
+  # table; the `model` and `variant` tags tell them apart
+  pretrain_experiment: pubmed-dapt
   pretrain_registered_model: ${model.name}-pubmed-dapt
-  multitask_experiment: ${model.name}-med-multitask
-  multitask_registered_model: ${model.name}-med-multitask
+  # Zero-shot, fine-tuning and evaluations of every variant (base, dapt, lora, dapt-lora)
+  selection_experiment: med-qa-selection
+  # Best fine-tuned model of each variant, by alias (lora-original-best, lora-dapt-best)
+  selection_registered_model: ${model.name}-med-qa
 
 # Small JSON summary of every pipeline stage (run ids, model URIs, metrics)
 results_dir: results/${model.name}

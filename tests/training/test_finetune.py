@@ -38,6 +38,12 @@ def test_build_sft_config_evaluates_once_per_mixture_epoch(tmp_path: Path) -> No
     assert sft_config.seed == 7
 
 
+def test_build_sft_config_leaves_mlflow_to_the_sectioned_callback(tmp_path: Path) -> None:
+    sft_config = build_sft_config(load(), tmp_path, seed=7, epoch_steps=1000)
+
+    assert sft_config.report_to in ([], ["none"])
+
+
 def test_build_sft_config_uses_trial_hyperparameters(tmp_path: Path) -> None:
     hyperparameters = {"learning_rate": 1e-4, "batch_size": 32, "lr_scheduler_type": "cosine", "warmup_ratio": 0.05}
 

@@ -15,7 +15,7 @@ numbers can be compared with other models. Every model is asked in the chat
 format it is trained on (system prompt, thinking off).
 
 Writes `results/<model>/benchmarks.json` and logs `benchmark_<task>_acc` to the
-MLflow run of each model.
+MLflow run of each model (under `benchmark/`).
 """
 
 import argparse
@@ -28,7 +28,6 @@ import mlflow
 import torch
 from lm_eval import simple_evaluate
 from lm_eval.tasks import TaskManager
-from mlflow.entities import Metric
 
 from medllm.config import BenchmarksConfig, MultitaskConfig, load_multitask_config
 from medllm.reporting.report import (
@@ -37,7 +36,7 @@ from medllm.reporting.report import (
     load_stage_result,
     save_stage_result,
 )
-from medllm.tracking import configure_tracking
+from medllm.tracking import configure_tracking, sectioned_metric_entries
 from medllm.training.finetune import summarize_seeds
 
 METRIC_PREFIX = "benchmark"
@@ -60,8 +59,22 @@ def harness_model_args(model_path: str, max_length: int) -> dict[str, Any]:
 
 
 def benchmark_tasks(benchmarks: BenchmarksConfig) -> list[str]:
-    """Every task to run: the medical ones, the general ones, then the perplexity ones."""
-    return list(benchmarks.tasks) + list(benchmarks.general_tasks) + list(benchmarks.perplexity_tasks)
+    """Every task to run: the medical ones, the general ones, then the perplexity ones.
+
+    A subtask whose group is also run (`mmlu_anatomy` next to `mmlu`) is left
+    out: the harness refuses to run a task twice, and the group's results
+    already hold the subtask's score.
+
+    Args:
+        benchmarks: Benchmark section of the configuration.
+
+    Returns:
+        Task names to pass to `lm_eval.simple_evaluate`, in order.
+    """
+    all_tasks: list[str] = list(benchmarks.tasks) + list(benchmarks.general_tasks) + list(benchmarks.perplexity_tasks)
+    # The harness names a group's subtasks `<group>_<subtask>`
+    group_prefixes: tuple[str, ...] = tuple(f"{task}_" for task in all_tasks)
+    return [task for task in all_tasks if not task.startswith(group_prefixes)]
 
 
 def benchmark_metrics(results: dict[str, Any], tasks: list[str]) -> dict[str, float]:
@@ -134,7 +147,7 @@ def benchmark_model(model_path: str, config: MultitaskConfig) -> dict[str, float
 def benchmark_and_log(client: mlflow.MlflowClient, model_path: str, run_id: str, config: MultitaskConfig) -> dict[str, float]:
     """Benchmark one model and log its metrics to its MLflow run."""
     metrics: dict[str, float] = benchmark_model(model_path, config)
-    client.log_batch(run_id, metrics=[Metric(key, value, 0, 0) for key, value in metrics.items()])
+    client.log_batch(run_id, metrics=sectioned_metric_entries(metrics))
     return metrics
 
 
@@ -183,7 +196,7 @@ def run_benchmarks(config: MultitaskConfig, runs: list[str], pretrained: bool = 
         summary: dict[str, dict[str, float]] = summarize_seeds([seed["metrics"] for seed in seeds])
         client.log_batch(
             finetune["parent_run_id"],
-            metrics=[Metric(f"{key}_mean", value["mean"], 0, 0) for key, value in summary.items()],
+            metrics=sectioned_metric_entries({f"{key}_mean": value["mean"] for key, value in summary.items()}),
         )
         outcome["runs"][run] = {"seeds": seeds, "summary": summary}
     return outcome
