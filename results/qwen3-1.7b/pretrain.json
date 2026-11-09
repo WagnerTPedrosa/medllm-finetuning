@@ -1,0 +1,8 @@
+{
+  "run_id": "17d67565da984478af08b8185f4cf991",
+  "model_dir": "checkpoints/pretrain/qwen3-1.7b-pubmed-dapt/final",
+  "eval_loss": 1.7152520418167114,
+  "eval_perplexity": 5.558076203461381,
+  "model_id": "m-43627e9d119843b992d28338b44d828d",
+  "model_uri": "models:/qwen3-1.7b-pubmed-dapt@candidate"
+}

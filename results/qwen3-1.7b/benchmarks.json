@@ -10,6 +10,14 @@
     "mmlu_medical_genetics",
     "mmlu_professional_medicine"
   ],
+  "general_tasks": [
+    "mmlu",
+    "arc_challenge",
+    "hellaswag"
+  ],
+  "perplexity_tasks": [
+    "wikitext"
+  ],
   "num_fewshot": 0,
   "runs": {
     "zero-shot": {
@@ -19,8 +27,8 @@
           "metrics": {
             "benchmark_medqa_4options_acc": 0.3582089552238806,
             "benchmark_medqa_4options_acc_stderr": 0.01344378289189538,
-            "benchmark_medmcqa_acc": 0.38369591202486253,
-            "benchmark_medmcqa_acc_stderr": 0.0075196754371529475,
+            "benchmark_medmcqa_acc": 0.3839349748983983,
+            "benchmark_medmcqa_acc_stderr": 0.0075205586226166935,
             "benchmark_pubmedqa_test_acc": 0.338,
             "benchmark_pubmedqa_test_acc_stderr": 0.02117566569520941,
             "benchmark_mmlu_anatomy_acc": 0.42962962962962964,
@@ -34,7 +42,14 @@
             "benchmark_mmlu_medical_genetics_acc": 0.4,
             "benchmark_mmlu_medical_genetics_acc_stderr": 0.04923659639173309,
             "benchmark_mmlu_professional_medicine_acc": 0.3088235294117647,
-            "benchmark_mmlu_professional_medicine_acc_stderr": 0.028064998167040094
+            "benchmark_mmlu_professional_medicine_acc_stderr": 0.028064998167040094,
+            "benchmark_mmlu_acc": 0.4161800313345677,
+            "benchmark_mmlu_acc_stderr": 0.004058652416515931,
+            "benchmark_arc_challenge_acc": 0.3464163822525597,
+            "benchmark_arc_challenge_acc_stderr": 0.013905011180063246,
+            "benchmark_hellaswag_acc": 0.45289782911770565,
+            "benchmark_hellaswag_acc_stderr": 0.004967591267557412,
+            "benchmark_wikitext_word_perplexity": 13.77429098498559
           }
         }
       ],
@@ -48,11 +63,11 @@
           "std": 0.0
         },
         "benchmark_medmcqa_acc": {
-          "mean": 0.38369591202486253,
+          "mean": 0.3839349748983983,
           "std": 0.0
         },
         "benchmark_medmcqa_acc_stderr": {
-          "mean": 0.0075196754371529475,
+          "mean": 0.0075205586226166935,
           "std": 0.0
         },
         "benchmark_pubmedqa_test_acc": {
@@ -110,6 +125,170 @@
         "benchmark_mmlu_professional_medicine_acc_stderr": {
           "mean": 0.028064998167040094,
           "std": 0.0
+        },
+        "benchmark_mmlu_acc": {
+          "mean": 0.4161800313345677,
+          "std": 0.0
+        },
+        "benchmark_mmlu_acc_stderr": {
+          "mean": 0.004058652416515931,
+          "std": 0.0
+        },
+        "benchmark_arc_challenge_acc": {
+          "mean": 0.3464163822525597,
+          "std": 0.0
+        },
+        "benchmark_arc_challenge_acc_stderr": {
+          "mean": 0.013905011180063246,
+          "std": 0.0
+        },
+        "benchmark_hellaswag_acc": {
+          "mean": 0.45289782911770565,
+          "std": 0.0
+        },
+        "benchmark_hellaswag_acc_stderr": {
+          "mean": 0.004967591267557412,
+          "std": 0.0
+        },
+        "benchmark_wikitext_word_perplexity": {
+          "mean": 13.77429098498559,
+          "std": 0.0
+        }
+      }
+    },
+    "zero-shot_dapt": {
+      "seeds": [
+        {
+          "run_id": "17d67565da984478af08b8185f4cf991",
+          "metrics": {
+            "benchmark_medqa_4options_acc": 0.28436763550667715,
+            "benchmark_medqa_4options_acc_stderr": 0.012648572500776643,
+            "benchmark_medmcqa_acc": 0.3265598852498207,
+            "benchmark_medmcqa_acc_stderr": 0.007251684390085928,
+            "benchmark_pubmedqa_test_acc": 0.338,
+            "benchmark_pubmedqa_test_acc_stderr": 0.02117566569520941,
+            "benchmark_mmlu_anatomy_acc": 0.21481481481481482,
+            "benchmark_mmlu_anatomy_acc_stderr": 0.035478541985608236,
+            "benchmark_mmlu_clinical_knowledge_acc": 0.2188679245283019,
+            "benchmark_mmlu_clinical_knowledge_acc_stderr": 0.025447863825108604,
+            "benchmark_mmlu_college_biology_acc": 0.2708333333333333,
+            "benchmark_mmlu_college_biology_acc_stderr": 0.03716177437566016,
+            "benchmark_mmlu_college_medicine_acc": 0.20809248554913296,
+            "benchmark_mmlu_college_medicine_acc_stderr": 0.030952890217749884,
+            "benchmark_mmlu_medical_genetics_acc": 0.3,
+            "benchmark_mmlu_medical_genetics_acc_stderr": 0.046056618647183814,
+            "benchmark_mmlu_professional_medicine_acc": 0.19117647058823528,
+            "benchmark_mmlu_professional_medicine_acc_stderr": 0.02388688192244036,
+            "benchmark_mmlu_acc": 0.24533542230451502,
+            "benchmark_mmlu_acc_stderr": 0.0036208678026868756,
+            "benchmark_arc_challenge_acc": 0.3037542662116041,
+            "benchmark_arc_challenge_acc_stderr": 0.013438909184778755,
+            "benchmark_hellaswag_acc": 0.42202748456482775,
+            "benchmark_hellaswag_acc_stderr": 0.004928735103635838,
+            "benchmark_wikitext_word_perplexity": 15.279909119710503
+          }
+        }
+      ],
+      "summary": {
+        "benchmark_medqa_4options_acc": {
+          "mean": 0.28436763550667715,
+          "std": 0.0
+        },
+        "benchmark_medqa_4options_acc_stderr": {
+          "mean": 0.012648572500776643,
+          "std": 0.0
+        },
+        "benchmark_medmcqa_acc": {
+          "mean": 0.3265598852498207,
+          "std": 0.0
+        },
+        "benchmark_medmcqa_acc_stderr": {
+          "mean": 0.007251684390085928,
+          "std": 0.0
+        },
+        "benchmark_pubmedqa_test_acc": {
+          "mean": 0.338,
+          "std": 0.0
+        },
+        "benchmark_pubmedqa_test_acc_stderr": {
+          "mean": 0.02117566569520941,
+          "std": 0.0
+        },
+        "benchmark_mmlu_anatomy_acc": {
+          "mean": 0.21481481481481482,
+          "std": 0.0
+        },
+        "benchmark_mmlu_anatomy_acc_stderr": {
+          "mean": 0.035478541985608236,
+          "std": 0.0
+        },
+        "benchmark_mmlu_clinical_knowledge_acc": {
+          "mean": 0.2188679245283019,
+          "std": 0.0
+        },
+        "benchmark_mmlu_clinical_knowledge_acc_stderr": {
+          "mean": 0.025447863825108604,
+          "std": 0.0
+        },
+        "benchmark_mmlu_college_biology_acc": {
+          "mean": 0.2708333333333333,
+          "std": 0.0
+        },
+        "benchmark_mmlu_college_biology_acc_stderr": {
+          "mean": 0.03716177437566016,
+          "std": 0.0
+        },
+        "benchmark_mmlu_college_medicine_acc": {
+          "mean": 0.20809248554913296,
+          "std": 0.0
+        },
+        "benchmark_mmlu_college_medicine_acc_stderr": {
+          "mean": 0.030952890217749884,
+          "std": 0.0
+        },
+        "benchmark_mmlu_medical_genetics_acc": {
+          "mean": 0.3,
+          "std": 0.0
+        },
+        "benchmark_mmlu_medical_genetics_acc_stderr": {
+          "mean": 0.046056618647183814,
+          "std": 0.0
+        },
+        "benchmark_mmlu_professional_medicine_acc": {
+          "mean": 0.19117647058823528,
+          "std": 0.0
+        },
+        "benchmark_mmlu_professional_medicine_acc_stderr": {
+          "mean": 0.02388688192244036,
+          "std": 0.0
+        },
+        "benchmark_mmlu_acc": {
+          "mean": 0.24533542230451502,
+          "std": 0.0
+        },
+        "benchmark_mmlu_acc_stderr": {
+          "mean": 0.0036208678026868756,
+          "std": 0.0
+        },
+        "benchmark_arc_challenge_acc": {
+          "mean": 0.3037542662116041,
+          "std": 0.0
+        },
+        "benchmark_arc_challenge_acc_stderr": {
+          "mean": 0.013438909184778755,
+          "std": 0.0
+        },
+        "benchmark_hellaswag_acc": {
+          "mean": 0.42202748456482775,
+          "std": 0.0
+        },
+        "benchmark_hellaswag_acc_stderr": {
+          "mean": 0.004928735103635838,
+          "std": 0.0
+        },
+        "benchmark_wikitext_word_perplexity": {
+          "mean": 15.279909119710503,
+          "std": 0.0
         }
       }
     },
@@ -120,8 +299,8 @@
           "metrics": {
             "benchmark_medqa_4options_acc": 0.45247446975648076,
             "benchmark_medqa_4options_acc_stderr": 0.013955830029213568,
-            "benchmark_medmcqa_acc": 0.44848195075304803,
-            "benchmark_medmcqa_acc_stderr": 0.0076906019805968225,
+            "benchmark_medmcqa_acc": 0.44824288787951233,
+            "benchmark_medmcqa_acc_stderr": 0.0076902181456650585,
             "benchmark_pubmedqa_test_acc": 0.74,
             "benchmark_pubmedqa_test_acc_stderr": 0.019635965529725505,
             "benchmark_mmlu_anatomy_acc": 0.5111111111111111,
@@ -135,7 +314,14 @@
             "benchmark_mmlu_medical_genetics_acc": 0.59,
             "benchmark_mmlu_medical_genetics_acc_stderr": 0.04943110704237102,
             "benchmark_mmlu_professional_medicine_acc": 0.5330882352941176,
-            "benchmark_mmlu_professional_medicine_acc_stderr": 0.03030625772246831
+            "benchmark_mmlu_professional_medicine_acc_stderr": 0.03030625772246831,
+            "benchmark_mmlu_acc": 0.5000712149266486,
+            "benchmark_mmlu_acc_stderr": 0.00410678778232338,
+            "benchmark_arc_challenge_acc": 0.4616040955631399,
+            "benchmark_arc_challenge_acc_stderr": 0.014568245550296358,
+            "benchmark_hellaswag_acc": 0.4599681338378809,
+            "benchmark_hellaswag_acc_stderr": 0.004973762948302789,
+            "benchmark_wikitext_word_perplexity": 21.573014870030875
           }
         }
       ],
@@ -149,11 +335,11 @@
           "std": 0.0
         },
         "benchmark_medmcqa_acc": {
-          "mean": 0.44848195075304803,
+          "mean": 0.44824288787951233,
           "std": 0.0
         },
         "benchmark_medmcqa_acc_stderr": {
-          "mean": 0.0076906019805968225,
+          "mean": 0.0076902181456650585,
           "std": 0.0
         },
         "benchmark_pubmedqa_test_acc": {
@@ -210,6 +396,170 @@
         },
         "benchmark_mmlu_professional_medicine_acc_stderr": {
           "mean": 0.03030625772246831,
+          "std": 0.0
+        },
+        "benchmark_mmlu_acc": {
+          "mean": 0.5000712149266486,
+          "std": 0.0
+        },
+        "benchmark_mmlu_acc_stderr": {
+          "mean": 0.00410678778232338,
+          "std": 0.0
+        },
+        "benchmark_arc_challenge_acc": {
+          "mean": 0.4616040955631399,
+          "std": 0.0
+        },
+        "benchmark_arc_challenge_acc_stderr": {
+          "mean": 0.014568245550296358,
+          "std": 0.0
+        },
+        "benchmark_hellaswag_acc": {
+          "mean": 0.4599681338378809,
+          "std": 0.0
+        },
+        "benchmark_hellaswag_acc_stderr": {
+          "mean": 0.004973762948302789,
+          "std": 0.0
+        },
+        "benchmark_wikitext_word_perplexity": {
+          "mean": 21.573014870030875,
+          "std": 0.0
+        }
+      }
+    },
+    "lora_dapt": {
+      "seeds": [
+        {
+          "run_id": "6c5ca8ed351842ce855ca8bb3f84a4fd",
+          "metrics": {
+            "benchmark_medqa_4options_acc": 0.43283582089552236,
+            "benchmark_medqa_4options_acc_stderr": 0.013892245162841136,
+            "benchmark_medmcqa_acc": 0.45517571121204875,
+            "benchmark_medmcqa_acc_stderr": 0.007700621114630266,
+            "benchmark_pubmedqa_test_acc": 0.752,
+            "benchmark_pubmedqa_test_acc_stderr": 0.019332342821239103,
+            "benchmark_mmlu_anatomy_acc": 0.562962962962963,
+            "benchmark_mmlu_anatomy_acc_stderr": 0.042849586397534,
+            "benchmark_mmlu_clinical_knowledge_acc": 0.5509433962264151,
+            "benchmark_mmlu_clinical_knowledge_acc_stderr": 0.030612730713641092,
+            "benchmark_mmlu_college_biology_acc": 0.6666666666666666,
+            "benchmark_mmlu_college_biology_acc_stderr": 0.039420826399272135,
+            "benchmark_mmlu_college_medicine_acc": 0.5144508670520231,
+            "benchmark_mmlu_college_medicine_acc_stderr": 0.03810871630454764,
+            "benchmark_mmlu_medical_genetics_acc": 0.6,
+            "benchmark_mmlu_medical_genetics_acc_stderr": 0.049236596391733084,
+            "benchmark_mmlu_professional_medicine_acc": 0.4852941176470588,
+            "benchmark_mmlu_professional_medicine_acc_stderr": 0.03035969707904612,
+            "benchmark_mmlu_acc": 0.5127474718701039,
+            "benchmark_mmlu_acc_stderr": 0.004100042993117932,
+            "benchmark_arc_challenge_acc": 0.4283276450511945,
+            "benchmark_arc_challenge_acc_stderr": 0.014460496367599017,
+            "benchmark_hellaswag_acc": 0.44214299940250945,
+            "benchmark_hellaswag_acc_stderr": 0.004956262919324399,
+            "benchmark_wikitext_word_perplexity": 23.303283599599865
+          }
+        }
+      ],
+      "summary": {
+        "benchmark_medqa_4options_acc": {
+          "mean": 0.43283582089552236,
+          "std": 0.0
+        },
+        "benchmark_medqa_4options_acc_stderr": {
+          "mean": 0.013892245162841136,
+          "std": 0.0
+        },
+        "benchmark_medmcqa_acc": {
+          "mean": 0.45517571121204875,
+          "std": 0.0
+        },
+        "benchmark_medmcqa_acc_stderr": {
+          "mean": 0.007700621114630266,
+          "std": 0.0
+        },
+        "benchmark_pubmedqa_test_acc": {
+          "mean": 0.752,
+          "std": 0.0
+        },
+        "benchmark_pubmedqa_test_acc_stderr": {
+          "mean": 0.019332342821239103,
+          "std": 0.0
+        },
+        "benchmark_mmlu_anatomy_acc": {
+          "mean": 0.562962962962963,
+          "std": 0.0
+        },
+        "benchmark_mmlu_anatomy_acc_stderr": {
+          "mean": 0.042849586397534,
+          "std": 0.0
+        },
+        "benchmark_mmlu_clinical_knowledge_acc": {
+          "mean": 0.5509433962264151,
+          "std": 0.0
+        },
+        "benchmark_mmlu_clinical_knowledge_acc_stderr": {
+          "mean": 0.030612730713641092,
+          "std": 0.0
+        },
+        "benchmark_mmlu_college_biology_acc": {
+          "mean": 0.6666666666666666,
+          "std": 0.0
+        },
+        "benchmark_mmlu_college_biology_acc_stderr": {
+          "mean": 0.039420826399272135,
+          "std": 0.0
+        },
+        "benchmark_mmlu_college_medicine_acc": {
+          "mean": 0.5144508670520231,
+          "std": 0.0
+        },
+        "benchmark_mmlu_college_medicine_acc_stderr": {
+          "mean": 0.03810871630454764,
+          "std": 0.0
+        },
+        "benchmark_mmlu_medical_genetics_acc": {
+          "mean": 0.6,
+          "std": 0.0
+        },
+        "benchmark_mmlu_medical_genetics_acc_stderr": {
+          "mean": 0.049236596391733084,
+          "std": 0.0
+        },
+        "benchmark_mmlu_professional_medicine_acc": {
+          "mean": 0.4852941176470588,
+          "std": 0.0
+        },
+        "benchmark_mmlu_professional_medicine_acc_stderr": {
+          "mean": 0.03035969707904612,
+          "std": 0.0
+        },
+        "benchmark_mmlu_acc": {
+          "mean": 0.5127474718701039,
+          "std": 0.0
+        },
+        "benchmark_mmlu_acc_stderr": {
+          "mean": 0.004100042993117932,
+          "std": 0.0
+        },
+        "benchmark_arc_challenge_acc": {
+          "mean": 0.4283276450511945,
+          "std": 0.0
+        },
+        "benchmark_arc_challenge_acc_stderr": {
+          "mean": 0.014460496367599017,
+          "std": 0.0
+        },
+        "benchmark_hellaswag_acc": {
+          "mean": 0.44214299940250945,
+          "std": 0.0
+        },
+        "benchmark_hellaswag_acc_stderr": {
+          "mean": 0.004956262919324399,
+          "std": 0.0
+        },
+        "benchmark_wikitext_word_perplexity": {
+          "mean": 23.303283599599865,
           "std": 0.0
         }
       }
