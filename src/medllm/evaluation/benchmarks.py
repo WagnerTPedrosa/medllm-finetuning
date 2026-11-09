@@ -60,8 +60,22 @@ def harness_model_args(model_path: str, max_length: int) -> dict[str, Any]:
 
 
 def benchmark_tasks(benchmarks: BenchmarksConfig) -> list[str]:
-    """Every task to run: the medical ones, the general ones, then the perplexity ones."""
-    return list(benchmarks.tasks) + list(benchmarks.general_tasks) + list(benchmarks.perplexity_tasks)
+    """Every task to run: the medical ones, the general ones, then the perplexity ones.
+
+    A subtask whose group is also run (`mmlu_anatomy` next to `mmlu`) is left
+    out: the harness refuses to run a task twice, and the group's results
+    already hold the subtask's score.
+
+    Args:
+        benchmarks: Benchmark section of the configuration.
+
+    Returns:
+        Task names to pass to `lm_eval.simple_evaluate`, in order.
+    """
+    all_tasks: list[str] = list(benchmarks.tasks) + list(benchmarks.general_tasks) + list(benchmarks.perplexity_tasks)
+    # The harness names a group's subtasks `<group>_<subtask>`
+    group_prefixes: tuple[str, ...] = tuple(f"{task}_" for task in all_tasks)
+    return [task for task in all_tasks if not task.startswith(group_prefixes)]
 
 
 def benchmark_metrics(results: dict[str, Any], tasks: list[str]) -> dict[str, float]:

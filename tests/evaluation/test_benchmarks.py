@@ -1,7 +1,7 @@
 import pytest
 from datasets import Dataset
 
-from medllm.config import load_multitask_config
+from medllm.config import BenchmarksConfig, load_multitask_config
 from medllm.evaluation.benchmarks import (
     benchmark_metrics,
     benchmark_tasks,
@@ -83,16 +83,25 @@ def test_benchmarks_config_lists_general_tasks_to_measure_forgetting() -> None:
     assert benchmarks.general_tasks == ["mmlu", "arc_challenge", "hellaswag"]
 
 
-def test_benchmark_tasks_runs_the_medical_and_the_general_tasks() -> None:
+def test_benchmark_tasks_runs_the_mmlu_medical_subjects_inside_mmlu() -> None:
+    # The harness refuses a subject listed next to its group; the group's results hold it
     config = load_multitask_config()
 
     tasks = benchmark_tasks(config.benchmarks)
 
-    assert tasks == (
-        list(config.benchmarks.tasks)
-        + list(config.benchmarks.general_tasks)
-        + list(config.benchmarks.perplexity_tasks)
+    assert tasks == ["medqa_4options", "medmcqa", "pubmedqa_test", "mmlu", "arc_challenge", "hellaswag", "wikitext"]
+
+
+def test_benchmark_tasks_keeps_a_subject_whose_group_is_not_run() -> None:
+    benchmarks = BenchmarksConfig(
+        tasks=["medmcqa", "mmlu_anatomy"],
+        general_tasks=["arc_challenge"],
+        perplexity_tasks=["wikitext"],
+        num_fewshot=0,
+        batch_size=16,
     )
+
+    assert benchmark_tasks(benchmarks) == ["medmcqa", "mmlu_anatomy", "arc_challenge", "wikitext"]
 
 
 def test_benchmarks_config_measures_forgetting_as_wikitext_perplexity() -> None:
